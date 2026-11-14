@@ -10,6 +10,7 @@ pub mod error;
 pub mod ipc;
 pub mod launch;
 pub mod models;
+pub mod notify;
 pub mod resume;
 pub mod sqlite;
 pub mod storage;

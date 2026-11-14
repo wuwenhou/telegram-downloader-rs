@@ -110,7 +110,11 @@ Lifecycle: `QUEUED → RESOLVING → DOWNLOADING → VERIFYING → COMPLETED →
 
 - `tgdlrs-login.ps1` (WinForms, bilingual EN/VI): appears when logged out; saves
   `api_id`/`api_hash`/phone; OTP/2FA stay typed in the terminal (hidden); detects
-  successful login by the console exit code + session file.
+  successful login by the console exit code + session file. Includes a
+  **download-folder** section (browse/edit, applies to new jobs, backed-up
+  write to `config.json`) and a language toggle persisted as `gui_lang`.
+- `tgdlrs-notify.ps1` (WinForms): spawned detached by the worker whenever a job
+  **completes or fails**; small toast, bottom-right, auto-dismiss, bilingual.
 - `Desktop\Telegram Downloader - Login.lnk`.
 - CLI `tgdlrs <cmd> [--json]`.
 
@@ -125,7 +129,7 @@ Lifecycle: `QUEUED → RESOLVING → DOWNLOADING → VERIFYING → COMPLETED →
 | P4 | Worker + named pipe + recovery + autostart | ✅ smoke-tested; ✅ autostart registered |
 | P5 | CLI (12 commands) + `--json` | ✅ |
 | P6 | MCP 15 tools + structured outputs | ✅ live in OpenCode |
-| P7 | GUI login + shortcut + `--force` account switch | ✅ tested (EN/VI, failure path verified) |
+| P7 | GUI login + shortcut + `--force` account switch + download-folder picker + completion toast | ✅ tested (EN/VI, failure path verified) |
 | P8 | **Download CHINT.7z.021/.022/.024/.025/.026 + verify** | 🟡 **in progress** (5 jobs enqueued; .021 downloading, ~364 MB (9%) at 14:12; ~2.8 GB/h; see log) |
 | P9 | `7z t` once all 26 parts exist | ⏳ blocked by P8 |
 | P10 | Public GitHub repo, EN+VI docs/GUI | 🟡 in progress (docs/GUI bilingual; push happens **after** P8/P9 per decision) |

@@ -405,9 +405,20 @@ fn report_job(
     match joined {
         Ok((_, Ok(()))) => {}
         Ok((id, Err(error))) => {
-            if !matches!(error, Error::Paused | Error::Canceled) {
-                tracing::error!(download = %id, %error, "download job failed");
-                context.set_last_error(Some(format!("{id}: {error}")));
+            if matches!(error, Error::Paused | Error::Canceled) {
+                return;
+            }
+            tracing::error!(download = %id, %error, "download job failed");
+            context.set_last_error(Some(format!("{id}: {error}")));
+            if let Ok(current) = context.store.get(&id) {
+                if !current.state.is_terminal() {
+                    let _ = context.store.set_state(
+                        &current.id,
+                        DownloadState::Failed,
+                        Some(&error.to_string()),
+                    );
+                }
+                crate::notify::download_failed(&context.paths, &current, &error.to_string());
             }
         }
         Err(error) => {
@@ -509,6 +520,7 @@ async fn run_job(context: Arc<WorkerContext>, mut download: Download) -> Result<
                     .store
                     .mark_completed(&id, report.sha256_actual.as_deref())?;
             }
+            crate::notify::download_finished(&context.paths, &download, verify);
             return Ok(());
         }
         return Err(Error::Conflict(format!(
@@ -619,6 +631,7 @@ async fn run_job(context: Arc<WorkerContext>, mut download: Download) -> Result<
                             .store
                             .mark_completed(&id, report.sha256_actual.as_deref())?;
                     }
+                    crate::notify::download_finished(&context.paths, &download, verify);
                     Ok(())
                 }
                 Err(Error::Verification(message)) => {

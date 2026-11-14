@@ -72,6 +72,10 @@ whole download; it only enqueues/controls jobs. Errors are JSON objects with
 
 - `tgdlrs-login.ps1` / `tgdlrs-login.cmd` — bilingual (EN / Tiếng Việt) login
   window, installable with `extras/install-login-gui.ps1`.
+- Sections: login status & credentials, **download folder** (edit/browse, applies
+  to new jobs) and **Save folder**, plus Quick help in both languages.
+- `tgdlrs-notify.ps1` — small toast window (bottom-right, auto-close, `gui_lang`
+  aware) shown whenever a download **finishes or fails**.
 - OTP/2FA stay hidden in the console; only `api_id`/`api_hash`/phone are stored,
   in `%APPDATA%\tgdlrs\config.json` (timestamped backup is kept on save).
 

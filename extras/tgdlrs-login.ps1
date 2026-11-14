@@ -54,6 +54,14 @@ $script:LANG = @{
         err_phone    = 'Số điện thoại phải bắt đầu bằng + và mã quốc gia (ví dụ +849…).'
         err_write    = 'Không ghi được config.json: {0}'
         err_noexe    = 'Không thấy tgdlrs.exe tại {0}'
+        grp_download = 'Thư mục tải'
+        l_dir        = 'Vị trí tải file về (dùng cho mọi job mới)'
+        btn_browse   = '…'
+        btn_savedir  = 'Lưu thư mục tải'
+        dir_hint     = 'Chỉ áp dụng cho job MỚI; worker đang chạy giữ thư mục cũ.'
+        dir_saved    = 'Đã lưu thư mục tải. Job mới sẽ tải về đó; job đang chạy giữ thư mục cũ.'
+        dir_invalid  = 'Đường dẫn không hợp lệ hoặc không tạo/không ghi được: {0}'
+        browse_desc  = 'Chọn thư mục tải về'
         lang_label   = 'Ngôn ngữ:'
     }
     en = @{
@@ -97,6 +105,14 @@ $script:LANG = @{
         err_phone    = 'Phone must start with + and a country code (e.g. +849…).'
         err_write    = 'Cannot write config.json: {0}'
         err_noexe    = 'tgdlrs.exe not found at {0}'
+        grp_download = 'Download folder'
+        l_dir        = 'Where files get saved (applies to new jobs)'
+        btn_browse   = '…'
+        btn_savedir  = 'Save folder'
+        dir_hint     = 'Applies to NEW jobs only; a running worker keeps the old folder.'
+        dir_saved    = 'Download folder saved. New jobs will use it; running jobs keep the old folder.'
+        dir_invalid  = 'Path is invalid or cannot be created/written: {0}'
+        browse_desc  = 'Choose the download folder'
         lang_label   = 'Language:'
     }
 }
@@ -184,7 +200,7 @@ function Update-StatusLabel {
 # ---------- Build form ----------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = $script:T.form_title
-$form.Size = New-Object System.Drawing.Size(660, 640)
+$form.Size = New-Object System.Drawing.Size(660, 744)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
@@ -292,9 +308,49 @@ $chkForce.AutoSize = $true
 $chkForce.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
 $grp.Controls.Add($chkForce)
 
+$grpDownload = New-Object System.Windows.Forms.GroupBox
+$grpDownload.Name = 'grpDownload'
+$grpDownload.Location = New-Object System.Drawing.Point(15, 384)
+$grpDownload.Size = New-Object System.Drawing.Size(620, 100)
+$form.Controls.Add($grpDownload)
+
+$lDir = New-Object System.Windows.Forms.Label
+$lDir.Name = 'lDir'
+$lDir.Location = New-Object System.Drawing.Point(15, 22)
+$lDir.AutoSize = $true
+$grpDownload.Controls.Add($lDir)
+
+$tbDir = New-Object System.Windows.Forms.TextBox
+$tbDir.Name = 'tbDir'
+$tbDir.Location = New-Object System.Drawing.Point(15, 44)
+$tbDir.Size = New-Object System.Drawing.Size(385, 26)
+$cfgDir = Get-ConfigSafe
+if ($cfgDir -and $cfgDir.download_dir) { $tbDir.Text = [string]$cfgDir.download_dir } else { $tbDir.Text = 'D:\Downloads\Brave' }
+$grpDownload.Controls.Add($tbDir)
+
+$btnBrowse = New-Object System.Windows.Forms.Button
+$btnBrowse.Name = 'btnBrowse'
+$btnBrowse.Location = New-Object System.Drawing.Point(408, 44)
+$btnBrowse.Size = New-Object System.Drawing.Size(34, 26)
+$grpDownload.Controls.Add($btnBrowse)
+
+$btnSaveDir = New-Object System.Windows.Forms.Button
+$btnSaveDir.Name = 'btnSaveDir'
+$btnSaveDir.Location = New-Object System.Drawing.Point(450, 44)
+$btnSaveDir.Size = New-Object System.Drawing.Size(150, 26)
+$grpDownload.Controls.Add($btnSaveDir)
+
+$lblDirHint = New-Object System.Windows.Forms.Label
+$lblDirHint.Name = 'lblDirHint'
+$lblDirHint.Location = New-Object System.Drawing.Point(15, 76)
+$lblDirHint.AutoSize = $true
+$lblDirHint.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+$lblDirHint.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+$grpDownload.Controls.Add($lblDirHint)
+
 $grpGuide = New-Object System.Windows.Forms.GroupBox
 $grpGuide.Name = 'grpGuide'
-$grpGuide.Location = New-Object System.Drawing.Point(15, 380)
+$grpGuide.Location = New-Object System.Drawing.Point(15, 496)
 $grpGuide.Size = New-Object System.Drawing.Size(620, 100)
 $form.Controls.Add($grpGuide)
 
@@ -307,7 +363,7 @@ $grpGuide.Controls.Add($lblGuide)
 $btnSend = New-Object System.Windows.Forms.Button
 $btnSend.Name = 'btnSend'
 $btnSend.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 10)
-$btnSend.Location = New-Object System.Drawing.Point(30, 492)
+$btnSend.Location = New-Object System.Drawing.Point(30, 608)
 $btnSend.Size = New-Object System.Drawing.Size(190, 42)
 $btnSend.BackColor = [System.Drawing.Color]::FromArgb(26, 115, 232)
 $btnSend.ForeColor = [System.Drawing.Color]::White
@@ -316,19 +372,19 @@ $form.Controls.Add($btnSend)
 
 $btnRefresh = New-Object System.Windows.Forms.Button
 $btnRefresh.Name = 'btnRefresh'
-$btnRefresh.Location = New-Object System.Drawing.Point(240, 492)
+$btnRefresh.Location = New-Object System.Drawing.Point(240, 608)
 $btnRefresh.Size = New-Object System.Drawing.Size(180, 42)
 $form.Controls.Add($btnRefresh)
 
 $btnConfig = New-Object System.Windows.Forms.Button
 $btnConfig.Name = 'btnConfig'
-$btnConfig.Location = New-Object System.Drawing.Point(440, 492)
+$btnConfig.Location = New-Object System.Drawing.Point(440, 608)
 $btnConfig.Size = New-Object System.Drawing.Size(165, 42)
 $form.Controls.Add($btnConfig)
 
 $lblStatus = New-Object System.Windows.Forms.Label
 $lblStatus.Name = 'lblStatus'
-$lblStatus.Location = New-Object System.Drawing.Point(18, 546)
+$lblStatus.Location = New-Object System.Drawing.Point(18, 664)
 $lblStatus.Size = New-Object System.Drawing.Size(620, 40)
 $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(60, 64, 67)
 $form.Controls.Add($lblStatus)
@@ -355,6 +411,10 @@ function Apply-Language([string]$lang) {
         $form.Controls.Find('btnSend', $false)[0].Text = $script:T.btn_send
         $form.Controls.Find('btnRefresh', $false)[0].Text = $script:T.btn_refresh
         $form.Controls.Find('btnConfig', $false)[0].Text = $script:T.btn_config
+        $form.Controls.Find('grpDownload', $false)[0].Text = $script:T.grp_download
+        $form.Controls.Find('lDir', $true)[0].Text = $script:T.l_dir
+        $form.Controls.Find('btnSaveDir', $true)[0].Text = $script:T.btn_savedir
+        $form.Controls.Find('lblDirHint', $true)[0].Text = $script:T.dir_hint
         $lbl = $form.Controls.Find('lblStatus', $false)[0]
         if ($lbl.Text -notmatch '✓|✗|mã|exit|success|fail') { $lbl.Text = $script:T.lbl_ready }
         $cmb = $form.Controls.Find('cmbLang', $false)[0]
@@ -397,6 +457,40 @@ $timer.Add_Tick({
         return
     }
     Update-StatusLabel | Out-Null
+})
+
+$btnBrowse.Add_Click({
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = $script:T.browse_desc
+    $dialog.ShowNewFolderButton = $true
+    $current = $tbDir.Text.Trim()
+    if ($current -and (Test-Path $current)) { $dialog.SelectedPath = $current }
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $tbDir.Text = $dialog.SelectedPath }
+})
+
+$btnSaveDir.Add_Click({
+    $path = $tbDir.Text.Trim()
+    try {
+        if ([string]::IsNullOrWhiteSpace($path)) { throw 'empty path' }
+        $path = [System.IO.Path]::GetFullPath($path)
+        if (-not (Test-Path $path)) { New-Item -ItemType Directory -Force $path | Out-Null }
+        $probe = Join-Path $path '.tgdlrs-write-probe'
+        [System.IO.File]::WriteAllText($probe, 'ok')
+        Remove-Item $probe -Force
+    } catch {
+        Set-StatusText ([string]::Format($script:T.dir_invalid, $_)) ([System.Drawing.Color]::FromArgb(190, 0, 0))
+        [System.Media.SystemSounds]::Hand.Play()
+        return
+    }
+    $cfg = Get-ConfigSafe
+    if ($null -eq $cfg) { $cfg = [pscustomobject]@{} }
+    if (Test-Path $ConfigPath) { Copy-Item $ConfigPath "$ConfigPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)" -Force }
+    $cfg | Add-Member -NotePropertyName download_dir -NotePropertyValue $path -Force
+    $cfg | Add-Member -NotePropertyName gui_lang -NotePropertyValue $script:currentLang -Force
+    $json = $cfg | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($ConfigPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Set-StatusText $script:T.dir_saved ([System.Drawing.Color]::FromArgb(0, 128, 0))
+    [System.Media.SystemSounds]::Asterisk.Play()
 })
 
 $btnSend.Add_Click({

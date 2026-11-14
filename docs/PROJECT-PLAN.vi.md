@@ -108,6 +108,9 @@ Vòng đời: `QUEUED → RESOLVING → DOWNLOADING → VERIFYING → COMPLETED 
   lưu `api_id/api_hash/phone`; OTP/2FA vẫn gõ ẩn trong cửa sổ đen; tự phát hiện
   đăng nhập thành công qua exit code + session file; có nút **đăng nhập lại từ đầu
   (--force)** để đổi tài khoản; nhớ ngôn ngữ trong `config.json` (`gui_lang`).
+  Có mục **Thư mục tải** (sửa/duyệt, áp dụng cho job mới, ghi backup vào `config.json`).
+- `tgdlrs-notify.ps1` (WinForms): worker spawn detached khi một job **hoàn tất
+  hoặc thất bại**; toast nhỏ góc dưới-phải, tự đóng, song ngữ.
 - Shortcut `Desktop\Telegram Downloader - Login.lnk`.
 - CLI `tgdlrs <cmd> [--json]`.
 
@@ -122,7 +125,7 @@ Vòng đời: `QUEUED → RESOLVING → DOWNLOADING → VERIFYING → COMPLETED 
 | P4 | Worker + named pipe + recovery + autostart | ✅ smoke-tested; ✅ autostart đăng ký |
 | P5 | CLI 12 lệnh + `--json` | ✅ |
 | P6 | MCP 15 tools + structured output | ✅ live trong OpenCode |
-| P7 | GUI login + shortcut + đổi tài khoản --force | ✅ test (EN/VI, failure path) |
+| P7 | GUI login + shortcut + đổi tài khoản --force + chọn thư mục tải + toast khi xong | ✅ test (EN/VI, failure path) |
 | P8 | **Tải CHINT.7z.021/022/024/025/026 + verify** | 🟡 **đang chạy** (5 job enqueued; .021 đang tải, ~364 MB (9%) lúc 14:12; ~2,8 GB/h) |
 | P9 | `7z t` khi đủ 26 phần | ⏳ phụ thuộc P8 |
 | P10 | GitHub repo công khai, song ngữ EN/VI | 🟡 đang làm (docs/GUI song ngữ; push **sau** khi P8/P9 xong) |

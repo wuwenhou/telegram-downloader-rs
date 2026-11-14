@@ -70,6 +70,10 @@ không block phiên chat; lỗi trả JSON `{"kind","message"}` (ví dụ `flood
 
 - `tgdlrs-login.ps1` / `tgdlrs-login.cmd` — cửa sổ đăng nhập song ngữ EN/VI,
   cài bằng `extras/install-login-gui.ps1`.
+- Gồm: trạng thái đăng nhập & thông tin API, **thư mục tải** (sửa/duyệt,
+  áp dụng cho job mới) với nút **Lưu thư mục tải**, và hướng dẫn 3 bước song ngữ.
+- `tgdlrs-notify.ps1` — toast window nhỏ (góc dưới-phải, tự đóng, theo `gui_lang`)
+  hiện **mỗi khi một download hoàn tất hoặc thất bại**.
 - OTP/2FA vẫn gõ ẩn trong cửa sổ đen; chỉ `api_id`/`api_hash`/phone được lưu,
   ở `%APPDATA%\tgdlrs\config.json` (tự backup theo thời gian khi lưu).
 

@@ -22,13 +22,36 @@ thư mục tải được ghi, SQLite 3.53.x, worker, session, autostart.
 ## 2. Đăng nhập một lần (bắt buộc trước khi tải)
 
 Cách nhanh nhất — double-click **Telegram Downloader - Login** trên Desktop
-(`%LOCALAPPDATA%\tgdlrs\tgdlrs-login.cmd`):
+(`%LOCALAPPDATA%\tgdlrs\tgdlrs-login.cmd`). Cửa sổ song ngữ hiện ra:
+
+```
+[ Trạng thái hiện tại ]   worker / session / tài khoản
+[ Thông tin từ my...  ]   API ID + API Hash + SĐT  →  ① Lưu và gửi mã OTP
+[ Thư mục tải         ]   chọn nơi lưu file (sửa hoặc duyệt)  →  Lưu thư mục tải
+[ Hướng dẫn nhanh     ]   3 bước
+```
 
 1. Điền **API ID** (số), **API Hash** (32 hex, ẩn), **số điện thoại** `+84…`.
 2. Bấm **① Lưu và gửi mã OTP** → mở cửa sổ đen `tgdlrs login`.
 3. Trong cửa sổ đen: gõ mã OTP Telegram gửi vào app → Enter →
    mật khẩu 2FA (nếu có) → Enter. Các giá trị gõ **không hiện ra**.
 4. Cửa sổ form chuyển xanh: **ĐĂNG NHẬP THÀNH CÔNG**.
+
+### Đổi thư mục tải
+
+Ngay trong cửa sổ trên, dùng mục **Thư mục tải**: sửa đường dẫn hoặc bấm **…**
+để duyệt thư mục, rồi **Lưu thư mục tải**. Giá trị ghi vào `config.json`
+(backup theo thời gian) và áp dụng cho **mọi job mới**. Job đã enqueue giữ
+thư mục cũ trong row của nó; worker đang chạy giữ thư mục cũ tới khi restart
+(`tgdlrs daemon restart` khi rảnh).
+
+### Thông báo khi tải xong
+
+Mỗi khi một job hoàn tất — **thành công hoặc thất bại** — một toast nhỏ hiện
+góc dưới-phải (`tgdlrs-notify.ps1`, ngôn ngữ theo `gui_lang` trong `config.json`):
+
+- `Tải xong: <file> — <dung lượng>, đã xác minh SHA-256`
+- `Tải THẤT BẠI: <file> — <lý do>`
 
 Cách terminal:
 

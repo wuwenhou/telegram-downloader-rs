@@ -24,11 +24,34 @@ writability, SQLite version, worker, session and autostart status.
 Fastest: double-click **Telegram Downloader - Login** on your Desktop
 (`%LOCALAPPDATA%\tgdlrs\tgdlrs-login.cmd`). A small bilingual window appears:
 
+```
+[ Current status  ]      worker / session / account
+[ My.Telegram.org ]      API ID + API Hash + phone  →  ① Save and send OTP
+[ Download folder ]      where files go (edit or browse)  →  Save folder
+[ Quick help      ]      3-step instructions
+```
+
 1. Fill in **API ID** (number), **API Hash** (32 hex, hidden), **phone** (`+84…`).
-2. Click **① Save and send OTP** — the CLI window `tgdlrs login` opens.
+2. Click **① Save and send OTP** — `tgdlrs login` opens.
 3. In the black window type the OTP Telegram sends to the app → Enter →
    your 2FA password if you have one → Enter. Nothing is echoed.
-4. The window turns green: **LOGIN SUCCESSFUL**.
+4. The window turns green: **LOGGED IN**.
+
+### Setting the download folder
+
+Use the **Download folder** section of the same window: edit the path or click
+**…** to browse, then **Save folder**. The value is written to `config.json`
+(with a timestamped backup) and applies to **all new jobs**. Jobs already
+queued keep the folder stored in their row; a running worker keeps its current
+folder until restart (`tgdlrs daemon restart` when idle).
+
+### Notifications
+
+Whenever a job finishes — **success or failure** — a small toast pops up
+bottom-right (`tgdlrs-notify.ps1`, following `gui_lang` in `config.json`):
+
+- `Download complete: <file> — <size>, SHA-256 verified`
+- `Download FAILED: <file> — <reason>`
 
 Terminal way:
 

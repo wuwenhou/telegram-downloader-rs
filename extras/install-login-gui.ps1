@@ -8,6 +8,7 @@ New-Item -ItemType Directory -Force $dst | Out-Null
 
 Copy-Item (Join-Path $PSScriptRoot 'tgdlrs-login.ps1') (Join-Path $dst 'tgdlrs-login.ps1') -Force
 Copy-Item (Join-Path $PSScriptRoot 'tgdlrs-login.cmd') (Join-Path $dst 'tgdlrs-login.cmd') -Force
+Copy-Item (Join-Path $PSScriptRoot 'tgdlrs-notify.ps1') (Join-Path $dst 'tgdlrs-notify.ps1') -Force
 
 $ws = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
