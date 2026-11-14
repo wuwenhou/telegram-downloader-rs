@@ -20,10 +20,11 @@ use tokio::task::{JoinError, JoinSet};
 
 use crate::config::{Config, Paths};
 use crate::database::Store;
-use crate::downloader::{download_part, ChunkSource, DownloadControl, RetryPolicy};
+use crate::downloader::{ChunkSource, DownloadControl, RetryPolicy};
 use crate::error::{Error, Result};
 use crate::ipc::{self, Request, RequestHandler, Response};
 use crate::models::{Download, DownloadState, WorkerStatus};
+use crate::parallel::download_part_parallel;
 use crate::storage;
 use crate::telegram::{self, LoginStatus, TelegramConnection};
 use crate::verification::{self, FinalizeOutcome};
@@ -430,7 +431,12 @@ fn report_job(
 
 async fn run_job(context: Arc<WorkerContext>, mut download: Download) -> Result<()> {
     let id = download.id.clone();
-    let telegram = context.telegram()?;
+    let telegram = context.telegram.as_ref().cloned().ok_or_else(|| {
+        Error::Config(
+            "the worker has no Telegram connection; set api_id/api_hash and run `tgdlrs login`"
+                .into(),
+        )
+    })?;
 
     if download.chat_id.is_none() || download.message_id.is_none() {
         let url = download
@@ -560,15 +566,18 @@ async fn run_job(context: Arc<WorkerContext>, mut download: Download) -> Result<
     let part_path = download.part_path.clone();
     let document = file.document.clone();
     let source_client = telegram;
+    let progress_id_retry = progress_id.clone();
+    let store_retry = Arc::clone(&store);
 
-    let outcome = download_part(
+    let outcome = download_part_parallel(
         &part_path,
         Some(total),
-        |offset| {
+        context.config.max_parallel_streams,
+        move |offset| {
             let source = source_client.source(&document, offset);
             Ok(Box::new(source) as Box<dyn ChunkSource>)
         },
-        |written, total| {
+        move |written, total| {
             if stop.load(Ordering::SeqCst) {
                 progress_control.pause();
             }
@@ -590,9 +599,9 @@ async fn run_job(context: Arc<WorkerContext>, mut download: Download) -> Result<
         },
         &control,
         &retry,
-        |_attempt, delay, error| {
+        move |_attempt, delay, error| {
             let seconds = delay.as_secs().max(1);
-            let _ = store.schedule_retry(&progress_id, &error.to_string(), seconds);
+            let _ = store_retry.schedule_retry(&progress_id_retry, &error.to_string(), seconds);
         },
     )
     .await;
@@ -686,6 +695,9 @@ async fn run_job(context: Arc<WorkerContext>, mut download: Download) -> Result<
 
 /// Rename a corrupt complete part to `<part>.bad-<timestamp>`.
 fn quarantine(part_path: &Path) {
+    // A quarantined .part invalidates the parallel ranges state file too.
+    let ranges = PathBuf::from(format!("{}.ranges.json", part_path.display()));
+    let _ = std::fs::remove_file(&ranges);
     if !part_path.exists() {
         return;
     }

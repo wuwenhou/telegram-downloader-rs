@@ -227,7 +227,37 @@ pub async fn download_part(
                     break;
                 }
             }
-            Ok(None) => break,
+            Ok(None) => {
+                // The iterator ended early. Telegram may terminate a response
+                // without an error (for example when a file reference expires
+                // mid-stream). Ending here would mark the bytes written so far
+                // as complete, leaving a corrupt .part behind — so treat it as
+                // a transient failure: recreate the iterator at the current
+                // offset with a fresh reference.
+                if let Some(total) = expected_size {
+                    if offset < total {
+                        let remaining = total - offset;
+                        if retries >= retry.max_attempts {
+                            return Err(Error::Download(format!(
+                                "connection ended at offset {offset} with {remaining} bytes remaining"
+                            )));
+                        }
+                        retries += 1;
+                        let delay = retry.delay_for(retries);
+                        on_retry(
+                            retries,
+                            delay,
+                            &Error::Download(format!(
+                                "connection ended at offset {offset} with {remaining} bytes remaining"
+                            )),
+                        );
+                        tokio::time::sleep(delay).await;
+                        source = make_source(offset)?;
+                        continue;
+                    }
+                }
+                break;
+            }
             Err(error) => {
                 let _ = file.sync_data();
                 if let Some(seconds) = error.flood_wait_seconds() {

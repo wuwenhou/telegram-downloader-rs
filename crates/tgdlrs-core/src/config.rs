@@ -17,6 +17,11 @@ pub const DEFAULT_DOWNLOAD_DIR: &str = r"D:\Downloads\Brave";
 pub const DEFAULT_DISK_RESERVE: u64 = 10 * 1024 * 1024 * 1024;
 /// Telegram serves file chunks aligned to this size.
 pub const TELEGRAM_CHUNK_SIZE: u32 = 512 * 1024;
+/// Default number of parallel download streams per file.
+pub const DEFAULT_PARALLEL_STREAMS: u32 = 4;
+fn default_parallel_streams() -> u32 {
+    DEFAULT_PARALLEL_STREAMS
+}
 
 /// Filesystem locations used by every binary.
 #[derive(Clone, Debug)]
@@ -73,6 +78,10 @@ impl Paths {
 pub struct Config {
     pub download_dir: PathBuf,
     pub max_concurrent_files: usize,
+    /// How many parallel chunk streams to use per file (Telegram serves each
+    /// independently). 1 = strictly serial.
+    #[serde(default = "default_parallel_streams")]
+    pub max_parallel_streams: u32,
     pub max_attempts: u32,
     pub verify_sha256: bool,
     pub skip_verified: bool,
@@ -95,6 +104,7 @@ impl Default for Config {
         Self {
             download_dir: PathBuf::from(DEFAULT_DOWNLOAD_DIR),
             max_concurrent_files: 1,
+            max_parallel_streams: DEFAULT_PARALLEL_STREAMS,
             max_attempts: 10,
             verify_sha256: true,
             skip_verified: true,
@@ -208,6 +218,7 @@ mod tests {
     fn defaults_match_specification() {
         let config = Config::default();
         assert_eq!(config.max_concurrent_files, 1);
+        assert_eq!(config.max_parallel_streams, DEFAULT_PARALLEL_STREAMS);
         assert_eq!(config.max_attempts, 10);
         assert!(config.verify_sha256);
         assert!(config.skip_verified);
