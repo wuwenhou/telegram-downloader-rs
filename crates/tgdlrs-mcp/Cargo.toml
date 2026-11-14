@@ -1,0 +1,28 @@
+[package]
+name = "tgdlrs-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "MCP server for Telegram Downloader RS"
+
+[lib]
+name = "tgdlrs_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tgdlrs-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tgdlrs-core = { path = "../tgdlrs-core" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

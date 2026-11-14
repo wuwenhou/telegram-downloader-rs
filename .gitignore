@@ -1,0 +1,10 @@
+/target
+*.part
+*.part.bak-*
+*.bad-*
+*.log
+config.json
+telegram.session.json
+telegram.session.json.*
+*.session
+.env

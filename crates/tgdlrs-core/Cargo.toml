@@ -1,0 +1,35 @@
+[package]
+name = "tgdlrs-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core library for Telegram Downloader RS"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+fs2.workspace = true
+futures-util.workspace = true
+grammers-client.workspace = true
+grammers-mtsender.workspace = true
+grammers-session.workspace = true
+grammers-tl-types.workspace = true
+hex.workspace = true
+libloading.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
