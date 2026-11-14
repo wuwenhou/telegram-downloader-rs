@@ -453,6 +453,27 @@ impl DownloadMcp {
 
 // ------------------------------------------------------------------ tools --
 
+/// Unique placeholder for jobs whose file name is only known after Telegram resolution.
+fn placeholder_file_name(
+    url: Option<&str>,
+    chat_id: Option<i64>,
+    message_id: Option<i32>,
+) -> String {
+    if let (Some(chat), Some(message)) = (chat_id, message_id) {
+        return format!("telegram-{chat}-{message}.bin");
+    }
+    if let Some(url) = url {
+        if let Ok(parsed) = tgdlrs_core::telegram::parse_link(url) {
+            return format!("download-{}.bin", parsed.message_id);
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("download-{nanos}.bin")
+}
+
 /// Look up one download by full id or unique prefix.
 fn find_download(store: &Store, id: &str) -> CoreResult<Download> {
     let trimmed = id.trim();
@@ -634,9 +655,8 @@ impl DownloadMcp {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .map(str::to_string)
-                .unwrap_or_else(|| match (chat_id, message_id) {
-                    (Some(chat), Some(message)) => format!("telegram-{chat}-{message}.bin"),
-                    _ => "download.bin".to_string(),
+                .unwrap_or_else(|| {
+                    placeholder_file_name(params.url.as_deref(), chat_id, message_id)
                 });
 
             let reused = self
@@ -1184,7 +1204,7 @@ impl DownloadMcp {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .map(str::to_string)
-                .unwrap_or_else(|| "download.bin".to_string());
+                .unwrap_or_else(|| placeholder_file_name(params.url.as_deref(), None, None));
 
             let reused = self
                 .store

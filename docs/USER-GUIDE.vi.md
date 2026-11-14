@@ -36,6 +36,10 @@ Cách terminal:
 C:\Users\OWG\AppData\Local\tgdlrs\bin\tgdlrs.exe login
 ```
 
+> Đổi tài khoản (khi account hiện tại không vào được channel): dùng
+> **«Đăng nhập lại từ đầu (--force)»** trong GUI hoặc `tgdlrs login --force`.
+> Session cũ tự backup thành `telegram.session.json.bak-<thời gian>`.
+>
 > Session lưu tại `%APPDATA%\tgdlrs\telegram.session.json`.
 > **Không** chia sẻ/copy session; không gửi api_id/api_hash/OTP/2FA vào chat.
 
@@ -115,6 +119,7 @@ phiên chat; lỗi trả JSON `{"kind","message"}` (ví dụ `flood_wait`).
 |---|---|
 | `worker is not running` | `tgdlrs daemon start` |
 | `telegram session is not authorized` | `tgdlrs login` |
+| CHANNEL_INVALID | account hiện tại **không phải thành viên** channel — đăng nhập bằng account thành viên (GUI → Đăng nhập lại từ đầu, hoặc `tgdlrs login --force`) |
 | `api_id is missing` | điền vào config.json hoặc biến môi trường User `TGDLRS_API_ID`/`TGDLRS_API_HASH` |
 | FloodWait | chờ — worker tự ngủ đúng thời gian server yêu cầu, rồi chạy tiếp |
 | File lỗi verify | job FAILED, `.part` quarantine thành `.part.bad-<ts>`; `tgdlrs retry <id>` để làm lại |
