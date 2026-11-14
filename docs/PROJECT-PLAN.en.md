@@ -1,4 +1,4 @@
-# Telegram Downloader RS — Project plan (English)
+# Telegram Downloader RS â€” Project plan (English)
 
 This document describes the **design decisions, architecture and current
 status** for maintainers and agents (OpenCode). State is recorded as of
@@ -8,9 +8,9 @@ status** for maintainers and agents (OpenCode). State is recorded as of
 
 ## 1. Goals
 
-1. Download very large Telegram files (`CHINT.7z.001…026`, ~4.17 GB each,
+1. Download very large Telegram files (`CHINT.7z.001â€¦026`, ~4.17 GB each,
    ~108.6 GB in total) into `D:\Downloads\Brave` without re-downloading parts
-   that are already complete (`.001`–`.020` and `.023`, all exactly
+   that are already complete (`.001`â€“`.020` and `.023`, all exactly
    4,175,429,632 bytes).
 2. **Real byte-level resume** after: network loss, process kill, Windows restart.
 3. Enqueue/control from CLI and from OpenCode (MCP), without blocking the chat.
@@ -25,7 +25,7 @@ status** for maintainers and agents (OpenCode). State is recorded as of
 | # | Requirement | Decision |
 |---|---|---|
 | R1 | Core engine in Rust, no C toolchain | `winsqlite3.dll` FFI via `libloading`; Grammers (pure Rust) |
-| R2 | Windows x64 | `rust-toolchain.toml` → `stable-x86_64-pc-windows-gnu` |
+| R2 | Windows x64 | `rust-toolchain.toml` â†’ `stable-x86_64-pc-windows-gnu` |
 | R3 | Byte-level resume for Telegram | `upload.getFile`, 512 KiB chunks, `skip_chunks`; unaligned tail truncated |
 | R4 | Session survives restart | `grammers-session` + custom `FileSession` (atomic JSON persist) |
 | R5 | Queue + pause/resume/retry/cancel + FloodWait | Worker polls SQLite every ~2 s; `DownloadControl` set from DB state |
@@ -41,20 +41,20 @@ needs `TMP`/`TEMP` pointing at a writable folder (`target\tmp`).
 ## 3. Architecture
 
 ```
-┌──────────────┐   DB writes (pause/resume/…)   ┌────────────────┐
-│ tgdlrs CLI   │────────────────────────────────▶│                │
-└──────┬───────┘                                 │  state.db      │
-       │ IPC (named pipe, JSON-lines)            │  (winsqlite3,  │
-       ▼                                         │   WAL)         │
-┌──────────────┐   IPC (scan/resolve/search)    │                │
-│ tgdlrs-mcp   │◀───────────────────────────────│                │
-│ (stdio)      │                                └──────┬─────────┘
-└──────┬───────┘                                       │ poll ~2s
-       │ enqueue (SQLite)                              ▼
-┌──────┴───────┐                             ┌──────────────────┐
-│ tgdlrs-worker│◀────────────────────────────│   (queue/control) │
-│  (detached)  │   Telegram MTProto          └──────────────────┘
-└──────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   DB writes (pause/resume/â€¦)   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ tgdlrs CLI   â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚                â”‚
+â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜                                 â”‚  state.db      â”‚
+       â”‚ IPC (named pipe, JSON-lines)            â”‚  (winsqlite3,  â”‚
+       â–¼                                         â”‚   WAL)         â”‚
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   IPC (scan/resolve/search)    â”‚                â”‚
+â”‚ tgdlrs-mcp   â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚                â”‚
+â”‚ (stdio)      â”‚                                â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜                                       â”‚ poll ~2s
+       â”‚ enqueue (SQLite)                              â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”                             â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ tgdlrs-workerâ”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚   (queue/control) â”‚
+â”‚  (detached)  â”‚   Telegram MTProto          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 - The **worker** is the only process holding the Telegram session. CLI/MCP
@@ -65,37 +65,37 @@ needs `TMP`/`TEMP` pointing at a writable folder (`target\tmp`).
 
 ## 4. Data model & states
 
-`%APPDATA%\tgdlrs\state.db` — tables: `downloads`, `download_parts`,
+`%APPDATA%\tgdlrs\state.db` â€” tables: `downloads`, `download_parts`,
 `download_events`, `telegram_sources`, `verification_results`, `settings`,
 `schema_migrations`.
 
-Lifecycle: `QUEUED → RESOLVING → DOWNLOADING → VERIFYING → COMPLETED → VERIFIED`
-(error branch: `RETRY_WAIT → QUEUED` or `FAILED`; `PAUSED` from most states;
+Lifecycle: `QUEUED â†’ RESOLVING â†’ DOWNLOADING â†’ VERIFYING â†’ COMPLETED â†’ VERIFIED`
+(error branch: `RETRY_WAIT â†’ QUEUED` or `FAILED`; `PAUSED` from most states;
 `CANCELED` from allowed states; re-verify can move a job to `FAILED`).
 
 ## 5. Resume design (the core)
 
 1. Every job uses `<safe_name>.part` (or `<safe_name>.<id8>.part` on collision).
 2. `plan_resume(part_len, expected_size)`:
-   - empty → start at 0;
-   - chunk-aligned → continue at offset;
-   - unaligned → truncate `.part` back to the last 512 KiB boundary, count `redownloaded_bytes`;
-   - `.part` larger than expected → restart from 0 (bytes kept for inspection).
+   - empty â†’ start at 0;
+   - chunk-aligned â†’ continue at offset;
+   - unaligned â†’ truncate `.part` back to the last 512 KiB boundary, count `redownloaded_bytes`;
+   - `.part` larger than expected â†’ restart from 0 (bytes kept for inspection).
 3. Source: `upload.getFile` requires 4 KiB-aligned offsets; Grammers
    `iter_download().chunk_size(512 KiB).skip_chunks(offset / 512 KiB)`;
    unaligned offset handled via `pending_skip` (fetch the aligned chunk, drop the prefix).
 4. After a network error the `DownloadIter` is recreated at the current written
    offset (Grammers iterators die after an error); exponential backoff with
    jitter, capped at 60 s; FloodWait is honored by sleeping exactly as required.
-5. Completion: if `final_path` exists → verify; match → atomic no-overwrite
-   rename; mismatch → job FAILED, existing file untouched; corrupt `.part`
+5. Completion: if `final_path` exists â†’ verify; match â†’ atomic no-overwrite
+   rename; mismatch â†’ job FAILED, existing file untouched; corrupt `.part`
    quarantined to `<part>.bad-<timestamp>` after a failed post-download hash check.
 
 ### Known limitations (honest)
 
 - If Telegram answers with a **CDN redirect**, Grammers (built with
   `cdn_supported = false`) panics; we catch the panic and surface a clear,
-  non-retryable `download` error — CDN is not supported.
+  non-retryable `download` error â€” CDN is not supported.
 - Long FloodWaits are honored (account safety over speed).
 - `skip_verified` skips re-download, not re-verification of existing files.
 
@@ -118,22 +118,22 @@ Lifecycle: `QUEUED → RESOLVING → DOWNLOADING → VERIFYING → COMPLETED →
 
 | Phase | Content | Status |
 |---|---|---|
-| P0 | Environment audit, toolchain, winsqlite3 | ✅ (GNU toolchain; SQLite 3.53.4; 123 GiB free) |
-| P1 | Core: sqlite FFI, models, store, migrations | ✅ + tests |
-| P2 | Resume engine (plan/loop/retry/control) | ✅ + tests |
-| P3 | Telegram connect/login/resolve/scan/search | ✅ compiled; ✅ verified live (account 玉玲珑) |
-| P4 | Worker + named pipe + recovery + autostart | ✅ smoke-tested; ✅ autostart registered |
-| P5 | CLI (12 commands) + `--json` | ✅ |
-| P6 | MCP 15 tools + structured outputs | ✅ live in OpenCode |
-| P7 | GUI login + shortcut + `--force` account switch | ✅ tested (EN/VI, failure path verified) |
-| P8 | **Download CHINT.7z.021/.022/.024/.025/.026 + verify** | 🟡 **in progress** (5 jobs enqueued; .021 downloading, ~95 MB at first check; see log) |
-| P9 | `7z t` once all 26 parts exist | ⏳ blocked by P8 |
-| P10 | Public GitHub repo, EN+VI docs/GUI | 🟡 in progress (docs/GUI bilingual; push happens **after** P8/P9 per decision) |
+| P0 | Environment audit, toolchain, winsqlite3 | âœ… (GNU toolchain; SQLite 3.53.4; 123 GiB free) |
+| P1 | Core: sqlite FFI, models, store, migrations | âœ… + tests |
+| P2 | Resume engine (plan/loop/retry/control) | âœ… + tests |
+| P3 | Telegram connect/login/resolve/scan/search | âœ… compiled; âœ… verified live (account ç‰ç²ç‘) |
+| P4 | Worker + named pipe + recovery + autostart | âœ… smoke-tested; âœ… autostart registered |
+| P5 | CLI (12 commands) + `--json` | âœ… |
+| P6 | MCP 15 tools + structured outputs | âœ… live in OpenCode |
+| P7 | GUI login + shortcut + `--force` account switch | âœ… tested (EN/VI, failure path verified) |
+| P8 | **Download CHINT.7z.021/.022/.024/.025/.026 + verify** | đŸŸ¡ **in progress** (5 jobs enqueued; .021 downloading, ~364 MB (9%) at 14:12; ~2.8 GB/h; see log) |
+| P9 | `7z t` once all 26 parts exist | â³ blocked by P8 |
+| P10 | Public GitHub repo, EN+VI docs/GUI | đŸŸ¡ in progress (docs/GUI bilingual; push happens **after** P8/P9 per decision) |
 
 Notes from live operation (2026-11-14):
 
-- `omegaxz` (first account) cannot resolve the private channel → `CHANNEL_INVALID`.
-  Switching to the member account `玉玲珑` fixed it. The GUI gained a
+- `omegaxz` (first account) cannot resolve the private channel â†’ `CHANNEL_INVALID`.
+  Switching to the member account `ç‰ç²ç‘` fixed it. The GUI gained a
   "log in again from scratch (--force)" switch for exactly this.
 - Five placeholder jobs created via the MCP URL-only path would have shared
   `download.bin`; they were canceled and re-enqueued with explicit per-part
@@ -143,27 +143,27 @@ Notes from live operation (2026-11-14):
 
 ## 9. Testing
 
-- `cargo test --workspace` — **43 tests green** (36 core + 7 MCP), including:
+- `cargo test --workspace` â€” **43 tests green** (36 core + 7 MCP), including:
   unaligned-tail truncation, pause/resume/retry via the DB, a `transition()`
   placeholder-binding regression (found by the lifecycle test), verify jobs,
   missing-parts detection, IPC round-trips, session snapshot round-trips/corruption.
-- `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo fmt --all -- --check` — clean.
-- `cargo build --release --workspace` — OK; binaries only depend on system DLLs.
+- `cargo clippy --workspace --all-targets -- -D warnings` â€” clean.
+- `cargo fmt --all -- --check` â€” clean.
+- `cargo build --release --workspace` â€” OK; binaries only depend on system DLLs.
 - Live resume across a `daemon stop`/`start` cycle: verified (`.part` resumed at
   the aligned offset, no re-downloaded bytes).
 - Not covered by automation (and therefore only claimed after live runs):
-  full live download of the 5 parts, CDN redirect behavior (see §5).
+  full live download of the 5 parts, CDN redirect behavior (see Â§5).
 
 ## 10. CHINT execution plan
 
-1. `tgdlrs login` as the channel member (`玉玲珑`) — **done**.
-2. `telegram_search_files(chat=-1001188194766, query="CHINT")` → found
-   `CHINT.7z.001…026` at message ids 1914…1939; parts are 4,175,429,632 bytes,
+1. `tgdlrs login` as the channel member (`ç‰ç²ç‘`) â€” **done**.
+2. `telegram_search_files(chat=-1001188194766, query="CHINT")` â†’ found
+   `CHINT.7z.001â€¦026` at message ids 1914â€¦1939; parts are 4,175,429,632 bytes,
    `.026` is 1,415,085,203 bytes.
-3. `telegram_find_missing_parts(1..26)` → missing exactly
+3. `telegram_find_missing_parts(1..26)` â†’ missing exactly
    `.021 (msg 1934), .022 (1935), .024 (1937), .025 (1938), .026 (1939)`.
-4. Enqueue exactly those five URLs with explicit names (see §8).
+4. Enqueue exactly those five URLs with explicit names (see Â§8).
 5. `telegram_list_downloads` to watch until all reach `VERIFIED`.
 6. Final `telegram_verify_file` pass; then `7z t CHINT.7z.001` (test only).
 7. Push the finished repo to GitHub (public, EN+VI) after P8/P9.
