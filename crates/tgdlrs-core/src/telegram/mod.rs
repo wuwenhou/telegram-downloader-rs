@@ -539,6 +539,276 @@ impl TelegramConnection {
     pub fn source(&self, document: &Document, offset: u64) -> source::TelegramChunkSource {
         source::TelegramChunkSource::new(self.client.clone(), document.clone(), offset)
     }
+
+    /// Resolve a peer from a numeric Bot API dialog id (`-100...`).
+    pub async fn peer_ref_for_dialog_id(&self, chat_id: i64) -> Result<PeerRef> {
+        self.peer_ref_for_bot_api_id(chat_id).await
+    }
+
+    /// Resolve a destination for uploads.
+    ///
+    /// Accepted forms:
+    /// - invite links (`https://t.me/+<hash>` or `https://t.me/joinchat/<hash>`),
+    /// - public `t.me/<name>` links or `@name`,
+    /// - private `t.me/c/<channel_id>/...` links.
+    ///
+    /// Returns the peer reference plus the channel title when available.
+    /// The account must already be a member (invite links do not auto-join
+    /// here); if it is not, a clear error is returned.
+    pub async fn resolve_destination(&self, dest: &str) -> Result<(PeerRef, Option<String>)> {
+        let trimmed = dest.trim();
+        let lower = trimmed.to_ascii_lowercase();
+
+        if let Some(hash) = split_invite_hash(&lower) {
+            return self.resolve_invite(trimmed, &hash).await;
+        }
+        if let Some(channel_id) = channel_id_of(&lower) {
+            let peer_ref = self.peer_ref_for_channel_id(channel_id).await?;
+            return Ok((peer_ref, None));
+        }
+        let username = lower
+            .replace("https://", "")
+            .replace("http://", "")
+            .replace("www.", "")
+            .replace("t.me/", "")
+            .replace("telegram.me/", "")
+            .trim_start_matches('@')
+            .split(['?', '/'])
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('@')
+            .to_string();
+        if username.is_empty() || username.eq_ignore_ascii_case("c") {
+            return Err(Error::InvalidInput(format!(
+                "cannot interpret destination: {trimmed}"
+            )));
+        }
+        let peer = self
+            .client
+            .resolve_username(&username)
+            .await
+            .map_err(map_invocation)?
+            .ok_or_else(|| Error::NotFound(format!("username @{username}")))?;
+        let title = peer.name().map(|name| name.to_string());
+        let peer_ref = peer
+            .to_ref()
+            .await
+            .map_err(|error| Error::Telegram(error.to_string()))?
+            .ok_or_else(|| Error::NotFound(format!("username @{username}")))?;
+        Ok((peer_ref, title))
+    }
+
+    /// Resolve an invite link for an account that is already a member.
+    async fn resolve_invite(&self, link: &str, hash: &str) -> Result<(PeerRef, Option<String>)> {
+        // Fast path: importing the invite returns the joined chat (works for
+        // most already-member accounts as well).
+        match self.client.accept_invite_link(link).await {
+            Ok(Some(peer)) => {
+                let title = peer.name().map(|name| name.to_string());
+                let peer_ref = peer
+                    .to_ref()
+                    .await
+                    .map_err(|error| Error::Telegram(error.to_string()))?
+                    .ok_or_else(|| {
+                        Error::NotFound("invite resolved but peer reference is missing".into())
+                    })?;
+                return Ok((peer_ref, title));
+            }
+            Ok(None) => {} // fall through to the membership probe
+            Err(_) => {}   // fall through to the membership probe
+        }
+
+        // Membership probe: `messages.checkChatInvite` returns the chat for
+        // accounts that already joined (`chatInviteAlready`).
+        let result = self
+            .client
+            .invoke(&tl::functions::messages::CheckChatInvite {
+                hash: hash.to_string(),
+            })
+            .await;
+
+        if let Ok(result) = result {
+            match result {
+                tl::enums::ChatInvite::Already(already) => {
+                    let (channel_id, access_hash, title) = match already.chat {
+                        tl::enums::Chat::Channel(channel) => {
+                            (channel.id, channel.access_hash, Some(channel.title))
+                        }
+                        tl::enums::Chat::ChannelForbidden(channel) => {
+                            (channel.id, None, Some(channel.title))
+                        }
+                        tl::enums::Chat::Forbidden(_) => {
+                            return Err(Error::NotAuthorized);
+                        }
+                        _ => {
+                            return Err(Error::Other(
+                                "invite target is not a broadcast channel".into(),
+                            ));
+                        }
+                    };
+                    if let Some(access_hash) = access_hash {
+                        let id = PeerId::channel(channel_id).ok_or_else(|| {
+                            Error::InvalidInput("channel id is out of range".into())
+                        })?;
+                        return Ok((
+                            PeerRef {
+                                id,
+                                auth: grammers_session::types::PeerAuth::from_hash(access_hash),
+                            },
+                            title,
+                        ));
+                    }
+                    let peer_ref = self.peer_ref_for_channel_id(channel_id).await?;
+                    return Ok((peer_ref, title));
+                }
+                tl::enums::ChatInvite::Peek(_) | tl::enums::ChatInvite::Invite(_) => {
+                    return Err(Error::Other(
+                        "this account is not a member of the destination channel; join it with the official Telegram app first".into(),
+                    ));
+                }
+            }
+        }
+
+        // The invite hash is rejected by Telegram (e.g. INVITE_HASH_EXPIRED),
+        // but the account may still be a member. Find the channel from the
+        // dialog list: the destination is the channel whose recent posts are
+        // .edz documents the user already uploaded.
+        self.find_edz_destination().await
+    }
+
+    /// Fallback destination detection: pick the dialog (channel/group) whose
+    /// recent posts are `.edz` documents, or whose title clearly hints at the
+    /// EDZ archive. Ambiguity is reported with candidates instead of guessed.
+    async fn find_edz_destination(&self) -> Result<(PeerRef, Option<String>)> {
+        use grammers_client::peer::Peer;
+
+        fn dialog_title(peer: &Peer) -> String {
+            match peer {
+                Peer::Channel(channel) => channel.title().to_string(),
+                Peer::Group(group) => group
+                    .title()
+                    .map(|title| title.to_string())
+                    .unwrap_or_else(|| "(unnamed group)".to_string()),
+                Peer::Community(community) => community.title().to_string(),
+                Peer::User(_) => String::new(),
+            }
+        }
+
+        fn last_message_is_edz(last: &Option<Message>) -> bool {
+            let Some(message) = last else {
+                return false;
+            };
+            let Some(media) = message.media() else {
+                return false;
+            };
+            match media {
+                Media::Document(document) => document
+                    .name()
+                    .map(|name| name.to_ascii_lowercase().ends_with(".edz"))
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }
+
+        fn has_edz_hint(title: &str) -> bool {
+            let lower = title.to_ascii_lowercase();
+            ["edz", "eplan", "chint", "oumijia"]
+                .iter()
+                .any(|hint| lower.contains(hint))
+        }
+
+        let mut candidates: Vec<(PeerRef, String)> = Vec::new();
+        let mut dialogs = self.client.iter_dialogs();
+        let mut checked = 0usize;
+        while let Some(dialog) = dialogs.next().await.map_err(map_invocation)? {
+            checked += 1;
+            if checked > 500 {
+                break;
+            }
+            let title = dialog_title(dialog.peer());
+            let is_candidate = match dialog.peer() {
+                Peer::Channel(_) | Peer::Community(_) => {
+                    has_edz_hint(&title) || last_message_is_edz(&dialog.last_message)
+                }
+                Peer::Group(_) => last_message_is_edz(&dialog.last_message),
+                Peer::User(_) => false,
+            };
+            if is_candidate {
+                candidates.push((dialog.peer_ref(), title));
+            }
+        }
+
+        match candidates.len() {
+            0 => Err(Error::NotFound(
+                "invite link is expired and no channel with recent .edz posts was found; \
+                 pass --dest-chat-id <id> with the channel's -100... id instead"
+                    .into(),
+            )),
+            1 => {
+                let (peer_ref, title) = candidates.pop().expect("one candidate");
+                eprintln!("destination auto-detected from dialog list: {title}");
+                Ok((peer_ref, Some(title)))
+            }
+            _ => {
+                // Narrow down by title hints before giving up.
+                let hinted: Vec<(PeerRef, String)> = candidates
+                    .iter()
+                    .filter(|(_, title)| has_edz_hint(title))
+                    .cloned()
+                    .collect();
+                if hinted.len() == 1 {
+                    let (peer_ref, title) = hinted.into_iter().next().expect("one hint");
+                    eprintln!("destination auto-detected from dialog list: {title}");
+                    return Ok((peer_ref, Some(title)));
+                }
+                let listing = candidates
+                    .iter()
+                    .map(|(peer_ref, title)| {
+                        let dialog_id = peer_ref
+                            .id
+                            .bot_api_dialog_id()
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "?".into());
+                        format!("- {title} (chat id {dialog_id})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Err(Error::InvalidInput(format!(
+                    "invite link is expired and several candidate channels were found; \
+                     re-run with --dest-chat-id <id>:\n{listing}"
+                )))
+            }
+        }
+    }
+}
+
+/// Extract the invite hash from a `t.me/+<hash>` or `t.me/joinchat/<hash>` link.
+fn split_invite_hash(lower: &str) -> Option<String> {
+    for marker in ["t.me/+", "t.me/joinchat/"] {
+        if let Some(index) = lower.find(marker) {
+            let start = index + marker.len();
+            // The hash itself is base64url-ish; stop at the first delimiter.
+            let hash: String = lower[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if !hash.is_empty() {
+                return Some(hash);
+            }
+        }
+    }
+    None
+}
+
+/// Extract a private channel id from `t.me/c/<id>/...` links.
+fn channel_id_of(lower: &str) -> Option<i64> {
+    let marker = "t.me/c/";
+    let start = lower.find(marker)? + marker.len();
+    let digits: String = lower[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 #[cfg(test)]

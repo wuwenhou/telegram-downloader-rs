@@ -131,6 +131,77 @@ enum Command {
         #[arg(long)]
         sha256: Option<String>,
     },
+    /// Upload every `.edz` in a split 7z archive to a Telegram channel,
+    /// one message per file, streaming from the archive without extracting.
+    Upload {
+        /// First volume of the split archive.
+        #[arg(long, default_value = r"D:\Downloads\Brave\CHINT.7z.001")]
+        archive: PathBuf,
+        /// Destination: invite link, @username, t.me/<name> or t.me/c/<id> link.
+        #[arg(long, default_value = "https://t.me/+n3n6yJvx7S1mNzll")]
+        dest: String,
+        /// Bot API chat id (-100...); skips invite-link / username resolution.
+        #[arg(long)]
+        dest_chat_id: Option<i64>,
+        /// Only process these archive entries (comma-separated file names).
+        #[arg(long, value_delimiter = ',')]
+        only: Option<Vec<String>>,
+        /// Path to 7z.exe (auto-detected if omitted).
+        #[arg(long)]
+        seven_zip: Option<PathBuf>,
+        /// Pacing between posts, in milliseconds.
+        #[arg(long, default_value_t = 1000)]
+        delay_ms: u64,
+        /// Only process the first N archive entries (0 = all).
+        #[arg(long, default_value_t = 0)]
+        limit: u64,
+        /// Number of concurrent upload workers (1 = sequential; 2 is a good speedup).
+        #[arg(long, default_value_t = 1)]
+        parallel: u32,
+        /// Retries per file (flood waits do not count toward this).
+        #[arg(long, default_value_t = 5)]
+        max_attempts: u32,
+        /// List and hash only; never send anything (still scans the destination).
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the destination scan (DB-only dedup; may duplicate posts!).
+        #[arg(long)]
+        skip_scan: bool,
+        /// Brand written into the caption.
+        #[arg(long, default_value = "CHINT")]
+        brand: String,
+        /// Directory for files that could not be uploaded after all retries.
+        #[arg(long)]
+        failure_dir: Option<PathBuf>,
+    },
+    /// Audit and repair EDZ captions on already-posted documents.
+    /// Default is audit-only; pass --yes to actually edit (CHINT archive files only).
+    FixCaptions {
+        /// First volume of the split archive.
+        #[arg(long, default_value = r"D:\Downloads\Brave\CHINT.7z.001")]
+        archive: PathBuf,
+        /// Destination: invite link, @username, t.me/<name> or t.me/c/<id> link.
+        #[arg(long, default_value = "https://t.me/+n3n6yJvx7S1mNzll")]
+        dest: String,
+        /// Bot API chat id (-100...); skips invite-link / username resolution.
+        #[arg(long)]
+        dest_chat_id: Option<i64>,
+        /// Path to 7z.exe (auto-detected if omitted).
+        #[arg(long)]
+        seven_zip: Option<PathBuf>,
+        /// Apply the edits (default: audit only — nothing is modified).
+        #[arg(long)]
+        yes: bool,
+        /// Only edit the first N flagged CHINT messages (0 = all).
+        #[arg(long, default_value_t = 0)]
+        limit: u64,
+        /// Re-audit after fixing (prints remaining flagged CHINT count).
+        #[arg(long)]
+        verify: bool,
+        /// Brand used in the repaired caption.
+        #[arg(long, default_value = "CHINT")]
+        brand: String,
+    },
     /// Run installation diagnostics.
     Doctor,
     /// Manage the background worker and its autostart entry.
@@ -215,6 +286,62 @@ impl Cli {
                 expected_size,
                 sha256,
             } => cmd_verify(&target, path, expected_size, sha256, json),
+            Command::Upload {
+                archive,
+                dest,
+                dest_chat_id,
+                only,
+                seven_zip,
+                delay_ms,
+                limit,
+                parallel,
+                max_attempts,
+                dry_run,
+                skip_scan,
+                brand,
+                failure_dir,
+            } => {
+                cmd_upload(
+                    archive,
+                    dest,
+                    dest_chat_id,
+                    only,
+                    seven_zip,
+                    delay_ms,
+                    limit,
+                    parallel,
+                    max_attempts,
+                    dry_run,
+                    skip_scan,
+                    brand,
+                    failure_dir,
+                    json,
+                )
+                .await
+            }
+            Command::FixCaptions {
+                archive,
+                dest,
+                dest_chat_id,
+                seven_zip,
+                yes,
+                limit,
+                verify,
+                brand,
+            } => {
+                cmd_fix_captions(
+                    archive,
+                    dest,
+                    dest_chat_id,
+                    seven_zip,
+                    yes,
+                    limit,
+                    verify,
+                    brand,
+                    json,
+                )
+                .await
+            }
             Command::Doctor => cmd_doctor(json).await,
             Command::Daemon { command } => cmd_daemon(command, json).await,
             Command::Mcp => tgdlrs_mcp::serve_stdio().await,
@@ -799,6 +926,164 @@ fn cmd_verify(
     }
 }
 
+// ------------------------------------------------------------- upload --
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_upload(
+    archive_path: PathBuf,
+    dest: String,
+    dest_chat_id: Option<i64>,
+    only: Option<Vec<String>>,
+    seven_zip: Option<PathBuf>,
+    delay_ms: u64,
+    limit: u64,
+    parallel: u32,
+    max_attempts: u32,
+    dry_run: bool,
+    skip_scan: bool,
+    brand: String,
+    failure_dir: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    let (paths, config) = load()?;
+
+    let seven_zip = match seven_zip {
+        Some(path) => {
+            if !path.is_file() {
+                return Err(Error::NotFound(format!(
+                    "7-Zip not found: {}",
+                    path.display()
+                )));
+            }
+            path
+        }
+        None => tgdlrs_core::archive::detect_seven_zip().ok_or_else(|| {
+            Error::Other("7-Zip not found; pass --seven-zip <path to 7z.exe>".into())
+        })?,
+    };
+    if !archive_path.is_file() {
+        return Err(Error::NotFound(format!(
+            "archive first volume not found: {}",
+            archive_path.display()
+        )));
+    }
+
+    // Open the session directly: the upload pipeline is a long-running
+    // foreground process, and the worker stays available for downloads.
+    let credentials = config.credentials()?;
+    let session = Arc::new(telegram::session::FileSession::load(&paths.session)?);
+    let connection = telegram::connect(session, credentials.api_id).await?;
+
+    let outcome = upload_inner(
+        &connection,
+        &paths,
+        archive_path,
+        &dest,
+        dest_chat_id,
+        only,
+        seven_zip,
+        delay_ms,
+        limit,
+        parallel,
+        max_attempts,
+        dry_run,
+        skip_scan,
+        brand,
+        failure_dir,
+        json,
+    )
+    .await;
+    connection.shutdown().await;
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upload_inner(
+    connection: &tgdlrs_core::telegram::TelegramConnection,
+    paths: &Paths,
+    archive_path: PathBuf,
+    dest: &str,
+    dest_chat_id: Option<i64>,
+    only: Option<Vec<String>>,
+    seven_zip: PathBuf,
+    delay_ms: u64,
+    limit: u64,
+    parallel: u32,
+    max_attempts: u32,
+    dry_run: bool,
+    skip_scan: bool,
+    brand: String,
+    failure_dir: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    if !connection.login_status().await?.authorized {
+        return Err(Error::NotAuthorized);
+    }
+
+    let (peer, title) = match dest_chat_id {
+        Some(chat_id) => (connection.peer_ref_for_dialog_id(chat_id).await?, None),
+        None => connection.resolve_destination(dest).await?,
+    };
+    let dest_label = title.unwrap_or_else(|| dest.to_string());
+    println!("destination: {dest_label}");
+    println!("archive:     {}", archive_path.display());
+    if dry_run {
+        println!("dry-run:     nothing will be sent to Telegram");
+    }
+
+    let store = open_store(paths)?;
+    let options = tgdlrs_core::upload::UploadOptions {
+        archive_volume: archive_path,
+        seven_zip,
+        peer,
+        dest_label,
+        brand,
+        delay: Duration::from_millis(delay_ms),
+        max_attempts,
+        limit,
+        dry_run,
+        failure_dir: failure_dir
+            .unwrap_or_else(|| std::env::temp_dir().join("tgdlrs-upload-failed")),
+        skip_scan,
+        only: only.map(|names| {
+            names
+                .into_iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect()
+        }),
+        parallel,
+    };
+
+    let summary = tgdlrs_core::upload::run_upload(connection, &store, options).await?;
+    let (posted, failed) = store.upload_counts()?;
+
+    if json {
+        return print_json(&serde_json::json!({
+            "entries": summary.entries,
+            "uploaded": summary.uploaded,
+            "skipped": summary.skipped,
+            "failed": summary.failed,
+            "bytes_uploaded": summary.bytes_uploaded,
+            "dry_run": summary.dry_run,
+            "elapsed_secs": summary.elapsed_secs,
+            "database_posted": posted,
+            "database_failed": failed,
+        }));
+    }
+
+    println!();
+    println!("done in {}s", summary.elapsed_secs);
+    println!("uploaded:                 {}", summary.uploaded);
+    println!("skipped (already posted): {}", summary.skipped);
+    println!("failed:                   {}", summary.failed);
+    println!(
+        "bytes uploaded:           {}",
+        human_bytes(summary.bytes_uploaded)
+    );
+    println!("database totals:          {posted} posted, {failed} failed");
+    Ok(())
+}
+
 // -------------------------------------------------------------- doctor --
 
 struct Check {
@@ -1190,4 +1475,291 @@ async fn cmd_daemon(command: DaemonCommand, json: bool) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// -------------------------------------------------------- caption fix --
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_fix_captions(
+    archive_path: PathBuf,
+    dest: String,
+    dest_chat_id: Option<i64>,
+    seven_zip: Option<PathBuf>,
+    yes: bool,
+    limit: u64,
+    verify: bool,
+    brand: String,
+    json: bool,
+) -> Result<()> {
+    let (paths, config) = load()?;
+
+    let seven_zip = match seven_zip {
+        Some(path) => {
+            if !path.is_file() {
+                return Err(Error::NotFound(format!(
+                    "7-Zip not found: {}",
+                    path.display()
+                )));
+            }
+            path
+        }
+        None => tgdlrs_core::archive::detect_seven_zip().ok_or_else(|| {
+            Error::Other("7-Zip not found; pass --seven-zip <path to 7z.exe>".into())
+        })?,
+    };
+    if !archive_path.is_file() {
+        return Err(Error::NotFound(format!(
+            "archive first volume not found: {}",
+            archive_path.display()
+        )));
+    }
+
+    let entries = tgdlrs_core::archive::list_entries(&seven_zip, &archive_path)?;
+
+    let credentials = config.credentials()?;
+    let session = Arc::new(telegram::session::FileSession::load(&paths.session)?);
+    let connection = telegram::connect(session, credentials.api_id).await?;
+
+    let outcome = fix_captions_inner(
+        &connection,
+        &paths,
+        &seven_zip,
+        &archive_path,
+        &entries,
+        &dest,
+        dest_chat_id,
+        yes,
+        limit,
+        verify,
+        brand,
+        json,
+    )
+    .await;
+    connection.shutdown().await;
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fix_captions_inner(
+    connection: &tgdlrs_core::telegram::TelegramConnection,
+    paths: &Paths,
+    seven_zip: &Path,
+    archive_path: &Path,
+    entries: &[tgdlrs_core::archive::ArchiveEntry],
+    dest: &str,
+    dest_chat_id: Option<i64>,
+    yes: bool,
+    limit: u64,
+    verify: bool,
+    brand: String,
+    json: bool,
+) -> Result<()> {
+    if !connection.login_status().await?.authorized {
+        return Err(Error::NotAuthorized);
+    }
+
+    let (peer, title) = match dest_chat_id {
+        Some(chat_id) => (connection.peer_ref_for_dialog_id(chat_id).await?, None),
+        None => connection.resolve_destination(dest).await?,
+    };
+    let dest_label = title.unwrap_or_else(|| dest.to_string());
+    println!("destination: {dest_label}");
+    println!(
+        "archive:     {} ({} entries)",
+        archive_path.display(),
+        entries.len()
+    );
+    println!(
+        "mode:        {}",
+        if yes {
+            "FIX (messages will be edited)"
+        } else {
+            "audit only"
+        }
+    );
+
+    println!("scanning destination (document filter)…");
+    let report =
+        tgdlrs_core::captionfix::collect_caption_audit(connection, peer, entries, 1_000_000)
+            .await?;
+
+    // Sort the flagged entries by message id for a stable report.
+    let mut sorted_entries = report.entries.clone();
+    sorted_entries.sort_by_key(|entry| entry.message_id);
+
+    let audit_path = paths.home.join("caption-audit.json");
+    let audit_bytes = serde_json::to_string_pretty(&sorted_entries)?;
+    std::fs::write(&audit_path, audit_bytes)?;
+
+    println!(
+        "audit: {} .edz documents, {} ok, {} flagged ({} CHINT, {} other)",
+        report.total_documents,
+        report.ok,
+        report.flagged_total,
+        report.flagged_chint,
+        report.flagged_other
+    );
+    println!("report written to {}", audit_path.display());
+
+    let sample: Vec<&tgdlrs_core::captionfix::AuditEntry> = sorted_entries
+        .iter()
+        .filter(|entry| entry.in_archive)
+        .take(10)
+        .collect();
+    for entry in &sample {
+        println!(
+            "  ! msg {} {} ({} B, sha_line={}, edzid={})",
+            entry.message_id,
+            entry.file_name,
+            entry.size_bytes,
+            entry.has_sha_line,
+            entry.has_edzid
+        );
+    }
+
+    if !yes {
+        println!("\naudit only — no messages were modified.");
+        println!("re-run with --yes to repair these captions (CHINT messages only)");
+        if json {
+            return print_json(&serde_json::json!({
+                "total_documents": report.total_documents,
+                "ok": report.ok,
+                "flagged_total": report.flagged_total,
+                "flagged_chint": report.flagged_chint,
+                "flagged_other": report.flagged_other,
+                "report": audit_path.to_string_lossy(),
+            }));
+        }
+        return Ok(());
+    }
+
+    // --------------------------- compute the CHINT subset of needed hashes --
+    let flagged_keys: HashSet<(String, u64)> = sorted_entries
+        .iter()
+        .filter(|entry| entry.in_archive)
+        .map(|entry| (entry.file_name.to_ascii_lowercase(), entry.size_bytes))
+        .collect();
+    let flagged_count = flagged_keys.len();
+    let cache_path = paths.home.join("archive-hashes.json");
+    println!(
+        "computing hashes for {flagged_count} flagged files (subset pass)…"
+    );
+    let sha_by_key = tgdlrs_core::captionfix::archive_hashes_subset(
+        &cache_path,
+        seven_zip,
+        archive_path,
+        entries,
+        &flagged_keys,
+    )
+    .await?;
+
+    // --------------------------------------------- backup flagged captions --
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let backup_path = paths.home.join(format!("caption-backup-{timestamp}.json"));
+    let flagged: Vec<&tgdlrs_core::captionfix::AuditEntry> = sorted_entries
+        .iter()
+        .filter(|entry| entry.in_archive)
+        .collect();
+    let backup: Vec<(i32, String)> = flagged
+        .iter()
+        .map(|entry| (entry.message_id, entry.caption.clone()))
+        .collect();
+    std::fs::write(&backup_path, serde_json::to_string_pretty(&backup)?)?;
+    println!(
+        "backed up {} original captions to {}",
+        backup.len(),
+        backup_path.display()
+    );
+
+    // ------------------------------------------------------------- edits --
+    let fix_path = paths.home.join(format!("caption-fixed-{timestamp}.json"));
+    let max_n = if limit == 0 {
+        flagged.len()
+    } else {
+        (limit as usize).min(flagged.len())
+    };
+    let mut fixed = 0u64;
+    let mut failed: Vec<(i32, String)> = Vec::new();
+
+    for (index, entry) in flagged.iter().take(max_n).enumerate() {
+        let key = (entry.file_name.to_ascii_lowercase(), entry.size_bytes);
+        let sha256 = match sha_by_key.get(&key) {
+            Some(sha) => sha.clone(),
+            None => {
+                let reason = "no archive hash for (name, size)".to_string();
+                failed.push((entry.message_id, reason.clone()));
+                println!("[{index}/{max_n}] FAILED {} — {reason}", entry.file_name);
+                continue;
+            }
+        };
+        let new_caption = tgdlrs_core::captionfix::repair_caption(&entry.caption, &sha256, &brand);
+        match tgdlrs_core::captionfix::edit_caption(
+            connection,
+            peer,
+            entry.message_id,
+            &new_caption,
+        )
+        .await
+        {
+            Ok(floods) => {
+                fixed += 1;
+                println!(
+                    "[{index}/{max_n}] fixed {} (msg {}{})",
+                    entry.file_name,
+                    entry.message_id,
+                    if floods > 0 {
+                        format!(", flood waits: {floods}")
+                    } else {
+                        String::new()
+                    }
+                );
+            }
+            Err(error) => {
+                failed.push((entry.message_id, error.to_string()));
+                println!(
+                    "[{index}/{max_n}] FAILED {} (msg {}) — {error}",
+                    entry.file_name, entry.message_id
+                );
+            }
+        }
+        if index + 1 < max_n {
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+    }
+
+    let fix_json = serde_json::json!({
+        "audit": audit_path.to_string_lossy(),
+        "backup": backup_path.to_string_lossy(),
+        "candidate_chint": flagged.len(),
+        "attempted": max_n,
+        "fixed": fixed,
+        "failed": failed.len(),
+        "failed_entries": failed,
+    });
+    std::fs::write(&fix_path, serde_json::to_string_pretty(&fix_json)?)?;
+    println!(
+        "\nfixed: {fixed}  failed: {}  (details: {})",
+        failed.len(),
+        fix_path.display()
+    );
+
+    if verify {
+        println!("\nre-auditing to verify remaining flagged CHINT captions…");
+        let report =
+            tgdlrs_core::captionfix::collect_caption_audit(connection, peer, entries, 1_000_000)
+                .await?;
+        println!(
+            "verify: {} .edz documents, {} ok, {} flagged ({} CHINT, {} other)",
+            report.total_documents,
+            report.ok,
+            report.flagged_total,
+            report.flagged_chint,
+            report.flagged_other
+        );
+    }
+
+    if json {
+        return print_json(&fix_json);
+    }
+    Ok(())
 }

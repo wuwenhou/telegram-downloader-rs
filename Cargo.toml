@@ -21,7 +21,7 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6"
 fs2 = "0.4"
 futures-util = "0.3"
-grammers-client = "0.12"
+grammers-client = { version = "0.12", features = ["parse_invite_link"] }
 grammers-mtsender = "0.12"
 grammers-session = { version = "0.12", default-features = false, features = ["serde"] }
 grammers-tl-types = "0.12"

@@ -1,5 +1,6 @@
 //! SQLite persistence layer.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::{Duration, SecondsFormat, Utc};
@@ -11,7 +12,7 @@ use crate::params;
 use crate::sqlite::{Database, Row, Value};
 
 /// Current schema version.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 
 /// RFC 3339 timestamp with second precision.
 pub fn now() -> String {
@@ -208,6 +209,27 @@ impl Store {
                     key        TEXT PRIMARY KEY,
                     value      TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS upload_jobs(
+                    file_name  TEXT PRIMARY KEY,
+                    size_bytes INTEGER NOT NULL,
+                    sha256     TEXT NOT NULL,
+                    state      TEXT NOT NULL,
+                    message_id INTEGER,
+                    attempts   INTEGER NOT NULL DEFAULT 0,
+                    error      TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_upload_jobs_state ON upload_jobs(state);
+
+                CREATE TABLE IF NOT EXISTS dest_inventory(
+                    file_name  TEXT PRIMARY KEY,
+                    size_bytes INTEGER NOT NULL,
+                    sha256     TEXT,
+                    message_id INTEGER,
+                    first_seen TEXT NOT NULL
                 );
                 "#,
             )?;
@@ -972,6 +994,190 @@ impl Store {
         })
     }
 
+    /// Lowercased file names that the upload pipeline already posted.
+    pub fn upload_posted_names(&self) -> Result<HashSet<String>> {
+        self.database.with(|connection| {
+            let rows = connection.query(
+                "SELECT file_name FROM upload_jobs WHERE state = 'posted'",
+                &[],
+            )?;
+            Ok(rows
+                .iter()
+                .filter_map(|row| row.get_string("file_name"))
+                .map(|name| name.to_ascii_lowercase())
+                .collect())
+        })
+    }
+
+    /// Record a successful upload (upsert).
+    pub fn upload_record_posted(
+        &self,
+        file_name: &str,
+        size_bytes: u64,
+        sha256: &str,
+        message_id: i32,
+        attempts: u32,
+    ) -> Result<()> {
+        self.database.with(|connection| {
+            connection.execute(
+                r#"INSERT INTO upload_jobs(file_name, size_bytes, sha256, state, message_id,
+                                            attempts, error, updated_at)
+                   VALUES (?1, ?2, ?3, 'posted', ?4, ?5, NULL, ?6)
+                   ON CONFLICT(file_name) DO UPDATE SET
+                       size_bytes = excluded.size_bytes,
+                       sha256     = excluded.sha256,
+                       state      = 'posted',
+                       message_id = excluded.message_id,
+                       attempts   = excluded.attempts,
+                       error      = NULL,
+                       updated_at = excluded.updated_at"#,
+                &params![
+                    file_name,
+                    size_bytes as i64,
+                    sha256,
+                    message_id as i64,
+                    attempts as i64,
+                    now()
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Record a permanently failed upload (upsert).
+    pub fn upload_record_failed(
+        &self,
+        file_name: &str,
+        size_bytes: u64,
+        sha256: &str,
+        attempts: u32,
+        error: &str,
+    ) -> Result<()> {
+        self.database.with(|connection| {
+            connection.execute(
+                r#"INSERT INTO upload_jobs(file_name, size_bytes, sha256, state, message_id,
+                                            attempts, error, updated_at)
+                   VALUES (?1, ?2, ?3, 'failed', NULL, ?4, ?5, ?6)
+                   ON CONFLICT(file_name) DO UPDATE SET
+                       size_bytes = excluded.size_bytes,
+                       sha256     = excluded.sha256,
+                       state      = 'failed',
+                       message_id = NULL,
+                       attempts   = excluded.attempts,
+                       error      = excluded.error,
+                       updated_at = excluded.updated_at"#,
+                &params![
+                    file_name,
+                    size_bytes as i64,
+                    sha256,
+                    attempts as i64,
+                    error,
+                    now()
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// `(posted, failed)` counts recorded by the upload pipeline.
+    pub fn upload_counts(&self) -> Result<(u64, u64)> {
+        self.database.with(|connection| {
+            let rows = connection.query(
+                "SELECT state, COUNT(*) AS total FROM upload_jobs GROUP BY state",
+                &[],
+            )?;
+            let mut posted = 0u64;
+            let mut failed = 0u64;
+            for row in &rows {
+                let state = row.get_string("state").unwrap_or_default();
+                let total = row.get_u64("total").unwrap_or(0);
+                match state.as_str() {
+                    "posted" => posted = total,
+                    "failed" => failed = total,
+                    _ => {}
+                }
+            }
+            Ok((posted, failed))
+        })
+    }
+
+    /// Replace the destination inventory with a fresh full scan (single transaction).
+    pub fn dest_inventory_replace(&self, rows: &[(String, u64, Option<String>, i32)]) -> Result<()> {
+        self.database.with(|connection| {
+            connection.execute_batch("BEGIN")?;
+            let result = (|| -> Result<()> {
+                connection.execute("DELETE FROM dest_inventory", &[])?;
+                for (file_name, size, sha256, message_id) in rows {
+                    connection.execute(
+                        "INSERT INTO dest_inventory(file_name, size_bytes, sha256, message_id, first_seen)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        &params![file_name, *size as i64, sha256.clone(), *message_id as i64, now()],
+                    )?;
+                }
+                Ok(())
+            })();
+            match result {
+                Ok(()) => connection.execute_batch("COMMIT"),
+                Err(error) => {
+                    let _ = connection.execute_batch("ROLLBACK");
+                    Err(error)
+                }
+            }
+        })
+    }
+
+    /// Merge newer documents (from an incremental scan) into the inventory.
+    pub fn dest_inventory_upsert(&self, rows: &[(String, u64, Option<String>, i32)]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        self.database.with(|connection| {
+            connection.execute_batch("BEGIN")?;
+            let result = (|| -> Result<()> {
+                for (file_name, size, sha256, message_id) in rows {
+                    connection.execute(
+                        "INSERT INTO dest_inventory(file_name, size_bytes, sha256, message_id, first_seen)
+                         VALUES (?1, ?2, ?3, ?4, ?5)
+                         ON CONFLICT(file_name) DO UPDATE SET
+                             size_bytes = excluded.size_bytes,
+                             sha256     = COALESCE(excluded.sha256, dest_inventory.sha256),
+                             message_id = MAX(dest_inventory.message_id, excluded.message_id)",
+                        &params![file_name, *size as i64, sha256.clone(), *message_id as i64, now()],
+                    )?;
+                }
+                Ok(())
+            })();
+            match result {
+                Ok(()) => connection.execute_batch("COMMIT"),
+                Err(error) => {
+                    let _ = connection.execute_batch("ROLLBACK");
+                    Err(error)
+                }
+            }
+        })
+    }
+
+    /// All file names known to be present in the destination channel.
+    pub fn dest_inventory_names(&self) -> Result<HashSet<String>> {
+        self.database.with(|connection| {
+            let rows = connection.query("SELECT file_name FROM dest_inventory", &[])?;
+            Ok(rows
+                .iter()
+                .filter_map(|row| row.get_string("file_name"))
+                .collect())
+        })
+    }
+
+    /// Destination scanning watermark: highest document message id seen.
+    pub fn dest_watermark(&self) -> Result<Option<i64>> {
+        self.setting("dest_scan_watermark")
+            .map(|value| value.and_then(|text| text.parse::<i64>().ok()))
+    }
+
+    pub fn set_dest_watermark(&self, watermark: i64) -> Result<()> {
+        self.set_setting("dest_scan_watermark", &watermark.to_string())
+    }
+
     /// Purge old events while keeping the most recent 50 per download.
     pub fn trim_events(&self) -> Result<()> {
         self.database.with(|connection| {
@@ -1047,5 +1253,27 @@ mod tests {
         // Resume/retry transitions clear the previous error message.
         assert!(store.retry(&job.id).unwrap());
         assert_eq!(store.get(&job.id).unwrap().error, None);
+    }
+
+    #[test]
+    fn dest_inventory_replace_merge_names_and_watermark() {
+        let (store, _dir) = test_store();
+        let rows = vec![
+            ("CHT.a.edz".to_string(), 100u64, Some("a".repeat(64)), 42i32),
+            ("CHT.b.edz".to_string(), 200, None, 43),
+        ];
+        store.dest_inventory_replace(&rows).unwrap();
+        assert_eq!(store.dest_inventory_names().unwrap().len(), 2);
+
+        // Incremental upsert: later data wins on size/sha, highest message id wins.
+        store
+            .dest_inventory_upsert(&[("CHT.a.edz".to_string(), 150, Some("b".repeat(64)), 44)])
+            .unwrap();
+        assert_eq!(store.dest_inventory_names().unwrap().len(), 2);
+
+        // Watermark round-trips as an integer string.
+        assert_eq!(store.dest_watermark().unwrap(), None);
+        store.set_dest_watermark(12345).unwrap();
+        assert_eq!(store.dest_watermark().unwrap(), Some(12345));
     }
 }

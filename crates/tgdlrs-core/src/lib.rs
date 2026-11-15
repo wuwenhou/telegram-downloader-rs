@@ -3,6 +3,8 @@
 //! The crate is deliberately split into small modules so the resumable
 //! download state machine can be tested without a Telegram account.
 
+pub mod archive;
+pub mod captionfix;
 pub mod config;
 pub mod database;
 pub mod downloader;
@@ -16,6 +18,7 @@ pub mod resume;
 pub mod sqlite;
 pub mod storage;
 pub mod telegram;
+pub mod upload;
 pub mod verification;
 pub mod worker;
 
