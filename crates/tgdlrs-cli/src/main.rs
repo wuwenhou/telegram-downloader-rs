@@ -202,6 +202,91 @@ enum Command {
         #[arg(long, default_value = "CHINT")]
         brand: String,
     },
+    /// Create ~1.8 GiB `CHNedz<N>.7z` bundles from a split 7z archive;
+    /// optionally upload each bundle to a destination immediately.
+    Bundle {
+        /// First volume of the split archive.
+        #[arg(long, default_value = r"D:\Downloads\Brave\CHINT.7z.001")]
+        archive: PathBuf,
+        /// Directory for the finished bundles (staging happens here too).
+        #[arg(long, default_value = r"E:\CHINTeDZ")]
+        output_dir: PathBuf,
+        /// Skip this many entries (archive order) — the archive state when the direct-upload run stopped.
+        #[arg(long, default_value_t = 0)]
+        skip_entries: usize,
+        /// Bucket size cap in bytes (default: 1.8 GiB).
+        #[arg(long, default_value_t = 1_932_735_283)]
+        bucket_bytes: u64,
+        /// Bundle file name prefix (no extension).
+        #[arg(long, default_value = "CHNedz")]
+        name_prefix: String,
+        /// Destination: invite link, @username, t.me link, or t.me/c/<id> link (upload each created bundle).
+        #[arg(long)]
+        dest: Option<String>,
+        /// Exact (or unique substring) title of the destination dialog; scans the account's dialog list.
+        #[arg(long)]
+        dest_title: Option<String>,
+        /// Bot API chat id (-100...); skips invite-link / username resolution.
+        #[arg(long)]
+        dest_chat_id: Option<i64>,
+        /// Keep bundles on disk after they are posted (default: delete).
+        #[arg(long)]
+        keep_after_post: bool,
+        /// Pacing between posts, in milliseconds.
+        #[arg(long, default_value_t = 250)]
+        delay_ms: u64,
+        /// Retries per bundle (flood waits do not count).
+        #[arg(long, default_value_t = 5)]
+        max_attempts: u32,
+        /// Path to 7z.exe (auto-detected if omitted).
+        #[arg(long)]
+        seven_zip: Option<PathBuf>,
+        /// Stop after publishing (or creating) this many bundles (0 = no limit).
+        #[arg(long, default_value_t = 0)]
+        max_bundles: u64,
+        /// Number of parallel upload workers.
+        #[arg(long, default_value_t = 2)]
+        parallel: u32,
+    },
+    /// Publish pre-built `.7z` bundles in a numbered range to a Telegram chat.
+    /// Files outside the range, and bundles recorded as posted, are
+    /// left untouched.
+    BundleUpload {
+        /// Directory containing the bundles.
+        #[arg(long, default_value = r"E:\CHINTeDZ")]
+        output_dir: PathBuf,
+        /// Bundle file name prefix (no extension).
+        #[arg(long, default_value = "CHNedz")]
+        name_prefix: String,
+        /// Lowest bundle index (inclusive).
+        #[arg(long, default_value_t = 110)]
+        from: u64,
+        /// Highest bundle index (inclusive).
+        #[arg(long, default_value_t = 180)]
+        to: u64,
+        /// Keep bundles on disk after they are posted (default: delete).
+        #[arg(long)]
+        keep_after_post: bool,
+        /// Pacing between posts, in milliseconds.
+        #[arg(long, default_value_t = 250)]
+        delay_ms: u64,
+        /// Retries per bundle (flood waits do not count).
+        #[arg(long, default_value_t = 5)]
+        max_attempts: u32,
+        /// Number of parallel upload workers.
+        #[arg(long, default_value_t = 2)]
+        parallel: u32,
+        /// Destination: invite link, @username, t.me/<name> or t.me/c/<id> link
+        /// (default: the dialog titled "OUMIJIA EDZ Control").
+        #[arg(long)]
+        dest: Option<String>,
+        /// Exact (or unique substring) title of the destination dialog; scans the account's dialog list.
+        #[arg(long)]
+        dest_title: Option<String>,
+        /// Bot API chat id (-100...); skips invite-link / username resolution.
+        #[arg(long)]
+        dest_chat_id: Option<i64>,
+    },
     /// Run installation diagnostics.
     Doctor,
     /// Manage the background worker and its autostart entry.
@@ -315,6 +400,70 @@ impl Cli {
                     skip_scan,
                     brand,
                     failure_dir,
+                    json,
+                )
+                .await
+            }
+            Command::Bundle {
+                archive,
+                output_dir,
+                skip_entries,
+                bucket_bytes,
+                name_prefix,
+                dest,
+                dest_chat_id,
+                dest_title,
+                keep_after_post,
+                delay_ms,
+                max_attempts,
+                seven_zip,
+                max_bundles,
+                parallel,
+            } => {
+                cmd_bundle(
+                    archive,
+                    output_dir,
+                    skip_entries,
+                    bucket_bytes,
+                    name_prefix,
+                    dest,
+                    dest_chat_id,
+                    dest_title,
+                    keep_after_post,
+                    delay_ms,
+                    max_attempts,
+                    seven_zip,
+                    max_bundles,
+                    parallel,
+                    json,
+                )
+                .await
+            }
+            Command::BundleUpload {
+                output_dir,
+                name_prefix,
+                from,
+                to,
+                keep_after_post,
+                delay_ms,
+                max_attempts,
+                parallel,
+                dest,
+                dest_title,
+                dest_chat_id,
+            } => {
+                cmd_bundle_upload(
+                    output_dir,
+                    name_prefix,
+                    from,
+                    to,
+                    keep_after_post,
+                    delay_ms,
+                    max_attempts,
+                    parallel,
+                    dest,
+                    dest_title,
+                    dest_chat_id,
                     json,
                 )
                 .await
@@ -1761,5 +1910,284 @@ async fn fix_captions_inner(
     if json {
         return print_json(&fix_json);
     }
+    Ok(())
+}
+
+// ----------------------------------------------------------------- bundle --
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_bundle(
+    archive_path: PathBuf,
+    output_dir: PathBuf,
+    skip_entries: usize,
+    bucket_bytes: u64,
+    name_prefix: String,
+    dest: Option<String>,
+    dest_chat_id: Option<i64>,
+    dest_title: Option<String>,
+    keep_after_post: bool,
+    delay_ms: u64,
+    max_attempts: u32,
+    seven_zip: Option<PathBuf>,
+    max_bundles: u64,
+    parallel: u32,
+    json: bool,
+) -> Result<()> {
+    let (paths, config) = load()?;
+
+    let seven_zip = match seven_zip {
+        Some(path) => {
+            if !path.is_file() {
+                return Err(Error::NotFound(format!("7-Zip not found: {}", path.display())));
+            }
+            path
+        }
+        None => tgdlrs_core::archive::detect_seven_zip().ok_or_else(|| {
+            Error::Other("7-Zip not found; pass --seven-zip <path to 7z.exe>".into())
+        })?,
+    };
+    if !archive_path.is_file() {
+        return Err(Error::NotFound(format!(
+            "archive first volume not found: {}",
+            archive_path.display()
+        )));
+    }
+    std::fs::create_dir_all(&output_dir)?;
+
+    let credentials = config.credentials()?;
+    let upload_requested = dest.is_some() || dest_chat_id.is_some() || dest_title.is_some();
+    let session = Arc::new(telegram::session::FileSession::load(&paths.session)?);
+    let connection = telegram::connect(session, credentials.api_id).await?;
+
+    let resolved: Result<(Option<tgdlrs_core::telegram::PeerRef>, Option<String>)> = async {
+        if !upload_requested {
+            return Ok((None, None));
+        }
+        if !connection.login_status().await?.authorized {
+            return Err(Error::NotAuthorized);
+        }
+        let (peer, title) = match (dest_chat_id, dest_title.as_deref(), dest.as_deref()) {
+            (Some(chat_id), _, _) => {
+                let peer = connection.peer_ref_for_dialog_id(chat_id).await?;
+                (peer, None)
+            }
+            (None, Some(title), _) => {
+                let (peer, matched) = connection.resolve_destination_by_title(title).await?;
+                (peer, matched)
+            }
+            (None, None, Some(_)) => {
+                let (peer, title) = connection
+                    .resolve_destination(dest.as_deref().unwrap_or(""))
+                    .await?;
+                (peer, title)
+            }
+            _ => return Err(Error::InvalidInput("no destination configured".into())),
+        };
+        let dest_label =
+            title.unwrap_or_else(|| dest.clone().unwrap_or_else(|| "chat".to_string()));
+        Ok((Some(peer), Some(dest_label)))
+    }
+    .await;
+
+    let outcome = match resolved {
+        Ok((peer, dest_label)) => {
+            bundle_inner(
+                connection,
+                paths,
+                archive_path,
+                output_dir,
+                skip_entries,
+                bucket_bytes,
+                name_prefix,
+                peer,
+                dest_label,
+                keep_after_post,
+                delay_ms,
+                max_attempts,
+                seven_zip,
+                max_bundles,
+                parallel,
+                json,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn bundle_inner(
+    connection: tgdlrs_core::telegram::TelegramConnection,
+    paths: Paths,
+    archive_path: PathBuf,
+    output_dir: PathBuf,
+    skip_entries: usize,
+    bucket_bytes: u64,
+    name_prefix: String,
+    peer: Option<tgdlrs_core::telegram::PeerRef>,
+    dest_label: Option<String>,
+    keep_after_post: bool,
+    delay_ms: u64,
+    max_attempts: u32,
+    seven_zip: PathBuf,
+    max_bundles: u64,
+    parallel: u32,
+    json: bool,
+) -> Result<()> {
+    if peer.is_some() && !connection.login_status().await?.authorized {
+        return Err(Error::NotAuthorized);
+    }
+    if let Some(label) = &dest_label {
+        println!("destination: {label}");
+    }
+    println!("archive:     {}", archive_path.display());
+    println!("output:      {}", output_dir.display());
+    if peer.is_none() {
+        println!("mode:        pack only (no upload)");
+    }
+
+    let store = open_store(&paths)?;
+    let options = tgdlrs_core::bundle::BundleOptions {
+        archive_volume: archive_path,
+        seven_zip,
+        skip_entries,
+        output_dir,
+        bucket_bytes,
+        name_prefix,
+        peer,
+        dest_label,
+        delay: Duration::from_millis(delay_ms),
+        max_attempts,
+        keep_after_post,
+        max_bundles,
+        parallel,
+    };
+
+    let summary = tgdlrs_core::bundle::run_bundle(connection, store, options).await?;
+
+    if json {
+        return print_json(&serde_json::json!({
+            "entries_processed": summary.entries_processed,
+            "bundles_created": summary.bundles_created,
+            "bundles_posted": summary.bundles_posted,
+            "bytes_written": summary.bytes_written,
+            "elapsed_secs": summary.elapsed_secs,
+        }));
+    }
+
+    println!();
+    println!("done in {}s", summary.elapsed_secs);
+    println!("entries processed: {}", summary.entries_processed);
+    println!("bundles created:   {}", summary.bundles_created);
+    println!("bundles posted:    {}", summary.bundles_posted);
+    println!("bytes written:     {}", human_bytes(summary.bytes_written));
+    Ok(())
+}
+
+// ----------------------------------------------------------- bundle-upload --
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_bundle_upload(
+    output_dir: PathBuf,
+    name_prefix: String,
+    from: u64,
+    to: u64,
+    keep_after_post: bool,
+    delay_ms: u64,
+    max_attempts: u32,
+    parallel: u32,
+    dest: Option<String>,
+    dest_title: Option<String>,
+    dest_chat_id: Option<i64>,
+    json: bool,
+) -> Result<()> {
+    let (paths, config) = load()?;
+    if !output_dir.is_dir() {
+        return Err(Error::NotFound(format!(
+            "output directory not found: {}",
+            output_dir.display()
+        )));
+    }
+    if from > to {
+        return Err(Error::InvalidInput(format!(
+            "--from ({from}) must be less than or equal to --to ({to})"
+        )));
+    }
+
+    let credentials = config.credentials()?;
+    let session = Arc::new(telegram::session::FileSession::load(&paths.session)?);
+    let connection = telegram::connect(session, credentials.api_id).await?;
+
+    let resolved: Result<(tgdlrs_core::telegram::PeerRef, Option<String>)> = async {
+        if !connection.login_status().await?.authorized {
+            return Err(Error::NotAuthorized);
+        }
+        let (peer, title) = match (dest_chat_id, dest_title.as_deref(), dest.as_deref()) {
+            (Some(chat_id), _, _) => (connection.peer_ref_for_dialog_id(chat_id).await?, None),
+            (None, Some(title), _) => {
+                let (peer, matched) = connection.resolve_destination_by_title(title).await?;
+                (peer, matched)
+            }
+            (None, None, Some(link)) => {
+                let (peer, title) = connection.resolve_destination(link).await?;
+                (peer, title)
+            }
+            (None, None, None) => {
+                let (peer, _matched) = connection
+                    .resolve_destination_by_title("OUMIJIA EDZ Control")
+                    .await?;
+                (peer, Some("OUMIJIA EDZ Control".to_string()))
+            }
+        };
+        let dest_label = title.unwrap_or_else(|| "OUMIJIA EDZ Control".to_string());
+        Ok((peer, Some(dest_label)))
+    }
+    .await;
+
+    let (peer, dest_label) = match resolved {
+        Ok(ok) => ok,
+        Err(error) => {
+            connection.shutdown().await;
+            return Err(error);
+        }
+    };
+    println!("destination: {}", dest_label.as_deref().unwrap_or("(unknown)"));
+    println!("output:      {}", output_dir.display());
+    println!("range:       {name_prefix}{from}..{name_prefix}{to}.7z  ({} bundles)", to - from + 1);
+    println!("parallel:    {parallel}");
+
+    let store = open_store(&paths)?;
+    let options = tgdlrs_core::bundle::BundleRangeOptions {
+        output_dir,
+        name_prefix,
+        from_index: from,
+        to_index: to,
+        keep_after_post,
+        delay: Duration::from_millis(delay_ms),
+        max_attempts,
+        parallel,
+    };
+    let summary = tgdlrs_core::bundle::upload_bundles_range(connection, store, peer, options).await;
+
+    // We cannot shut down the connection — it was moved into the helper.
+    // The process exits right after anyway.
+    let summary = summary?;
+
+    if json {
+        return print_json(&serde_json::json!({
+            "bundles_posted": summary.bundles_posted,
+            "bundles_skipped": summary.bundles_skipped,
+            "bytes_written": summary.bytes_written,
+            "elapsed_secs": summary.elapsed_secs,
+        }));
+    }
+
+    println!();
+    println!("done in {}s\nuploaded: {} bundles ({} MiB)\nskipped:  {} (already posted)",
+        summary.elapsed_secs,
+        summary.bundles_posted,
+        summary.bytes_written / (1024 * 1024),
+        summary.bundles_skipped);
     Ok(())
 }

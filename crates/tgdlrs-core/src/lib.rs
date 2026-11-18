@@ -4,6 +4,7 @@
 //! download state machine can be tested without a Telegram account.
 
 pub mod archive;
+pub mod bundle;
 pub mod captionfix;
 pub mod config;
 pub mod database;

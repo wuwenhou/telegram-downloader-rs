@@ -7,6 +7,8 @@
 pub mod session;
 pub mod source;
 
+pub use grammers_session::types::PeerRef;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,7 +17,7 @@ use grammers_client::media::{Document, Media};
 use grammers_client::message::Message;
 use grammers_client::{Client, SignInError};
 use grammers_mtsender::{InvocationError, SenderPool, SenderPoolFatHandle};
-use grammers_session::types::{PeerId, PeerRef};
+use grammers_session::types::PeerId;
 use grammers_tl_types as tl;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -540,6 +542,92 @@ impl TelegramConnection {
         source::TelegramChunkSource::new(self.client.clone(), document.clone(), offset)
     }
 
+    /// Build a public-API reference for the dialog matching `title` (any case,
+    /// substring match). Returns the peer and the exact title when exactly
+    /// one dialog matches; fails with the list of candidates otherwise.
+    pub async fn resolve_destination_by_title(
+        &self,
+        title: &str,
+    ) -> Result<(PeerRef, Option<String>)> {
+        use grammers_client::peer::Peer;
+        let needle = title.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return Err(Error::InvalidInput("destination title is empty".into()));
+        }
+        let mut dialogs = self.client.iter_dialogs();
+        let mut exact: Vec<(PeerRef, String)> = Vec::new();
+        let mut substring: Vec<(PeerRef, String)> = Vec::new();
+        let mut checked = 0usize;
+        while let Some(dialog) = dialogs.next().await.map_err(map_invocation)? {
+            checked += 1;
+            if checked > 5000 {
+                break;
+            }
+            let candidate_title = match dialog.peer() {
+                Peer::Channel(channel) => channel.title().to_string(),
+                Peer::Community(community) => community.title().to_string(),
+                Peer::Group(group) => group
+                    .title()
+                    .map(|title| title.to_string())
+                    .unwrap_or_default(),
+                Peer::User(_) => continue,
+            };
+            let lower = candidate_title.to_ascii_lowercase();
+            if lower == needle {
+                exact.push((dialog.peer_ref(), candidate_title));
+            } else if lower.contains(&needle) {
+                substring.push((dialog.peer_ref(), candidate_title));
+            }
+        }
+        if exact.len() == 1 {
+            let (peer_ref, title) = exact.pop().expect("one exact candidate");
+            return Ok((peer_ref, Some(title)));
+        }
+        if exact.len() > 1 {
+            let listing = exact
+                .iter()
+                .map(|(peer_ref, title)| {
+                    let dialog_id = peer_ref
+                        .id
+                        .bot_api_dialog_id()
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "?".into());
+                    format!("- {title} (chat id {dialog_id})")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(Error::InvalidInput(format!(
+                "several dialogs match the exact title \"{title}\":\n{listing}"
+            )));
+        }
+        if substring.len() == 1 {
+            let (peer_ref, title) = substring.pop().expect("one substring candidate");
+            return Ok((peer_ref, Some(title)));
+        }
+        let listing = substring
+            .iter()
+            .take(20)
+            .map(|(peer_ref, title)| {
+                let dialog_id = peer_ref
+                    .id
+                    .bot_api_dialog_id()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "?".into());
+                format!("- {title} (chat id {dialog_id})")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if listing.is_empty() {
+            Err(Error::NotFound(format!(
+                "no dialog found matching title \"{title}\""
+            )))
+        } else {
+            Err(Error::InvalidInput(format!(
+                "several dialogs match title \"{title}\":\n{listing}"
+            )))
+        }
+    }
+
     /// Resolve a peer from a numeric Bot API dialog id (`-100...`).
     pub async fn peer_ref_for_dialog_id(&self, chat_id: i64) -> Result<PeerRef> {
         self.peer_ref_for_bot_api_id(chat_id).await
@@ -722,7 +810,7 @@ impl TelegramConnection {
         let mut checked = 0usize;
         while let Some(dialog) = dialogs.next().await.map_err(map_invocation)? {
             checked += 1;
-            if checked > 500 {
+            if checked > 2500 {
                 break;
             }
             let title = dialog_title(dialog.peer());
