@@ -23,20 +23,7 @@ Windows x64 — for example multi-part archives like `CHINT.7z.001…026`.
 Installed under `%LOCALAPPDATA%\tgdlrs\bin\`; self-contained (system DLLs only;
 SQLite is loaded from `winsqlite3.dll` at runtime).
 
-## Installation (GUI wizard — no Administrator needed)
-
-1. Download/extract the release assets, or build with `cargo build --release --workspace`.
-2. Double-click **`extras\tgdlrs-setup.cmd`**. A 4-step wizard opens (Welcome →
-   options → Installing → Finish). It copies the binaries to
-   `%LOCALAPPDATA%\tgdlrs\bin\`, optionally registers worker autostart and
-   creates a Desktop login shortcut. If a binary is in use, setup stages it as
-   `.new` and renames it into place.
-3. Double-click the **Telegram Downloader RS** desktop shortcut to sign in
-   (phone, OTP, 2FA) — or use `tgdlrs login` in a terminal.
-
-Advanced/silent: `powershell -NoProfile -STA -ExecutionPolicy Bypass -File extras\tgdlrs-setup.ps1 -SourceBin <folder-with-binaries>`.
-
-## First-time setup (manual alternative)
+## First-time setup
 
 1. Get an `api_id`/`api_hash` pair from <https://my.telegram.org> (*API development tools*).
 2. Either run the bilingual login GUI — install with:
